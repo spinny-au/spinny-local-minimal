@@ -7,7 +7,7 @@ Minimal local companion node for Spinny.
 Open PowerShell and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/foreverdada6126/spinny-local-minimal/main/scripts/bootstrap-windows.ps1 | iex
+irm https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/bootstrap-windows.ps1 | iex
 ```
 
 That's it. The script installs Node.js, Ollama, and Git if missing, clones the repo, and walks you through pairing.
@@ -45,7 +45,7 @@ No model is downloaded during install. Model management is initiated from the `s
 
 ```powershell
 # 1. Clone and enter the repo
-git clone https://github.com/foreverdada6126/spinny-local-minimal.git
+git clone https://github.com/spinny-au/spinny-local-minimal.git
 cd spinny-local-minimal
 
 # 2. Check everything is ready

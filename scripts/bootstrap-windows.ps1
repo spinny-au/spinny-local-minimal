@@ -1,5 +1,5 @@
 # Spinny Local Minimal — One-command bootstrap for Windows
-# Usage: irm https://raw.githubusercontent.com/foreverdada6126/spinny-local-minimal/main/scripts/bootstrap-windows.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/bootstrap-windows.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
@@ -67,7 +67,7 @@ if (Test-Path "$InstallDir\.git") {
   git -C $InstallDir pull --ff-only
 } else {
   if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir }
-  git clone https://github.com/foreverdada6126/spinny-local-minimal.git $InstallDir
+  git clone https://github.com/spinny-au/spinny-local-minimal.git $InstallDir
 }
 Write-Ok "Files ready"
 
