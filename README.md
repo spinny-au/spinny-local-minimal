@@ -2,12 +2,17 @@
 
 Minimal local companion node for Spinny.
 
-## Prerequisites
+## Install (Windows)
 
-- **Node.js 22.5+** — [nodejs.org](https://nodejs.org)
-- **Ollama** — [ollama.com](https://ollama.com)
+Open PowerShell and run:
 
-Both must be installed before running the installer or any commands.
+```powershell
+irm https://raw.githubusercontent.com/foreverdada6126/spinny-local-minimal/main/scripts/bootstrap-windows.ps1 | iex
+```
+
+That's it. The script installs Node.js, Ollama, and Git if missing, clones the repo, and walks you through pairing.
+
+macOS / Linux — see [scripts/install-macos.sh](scripts/install-macos.sh) and [scripts/install-linux.sh](scripts/install-linux.sh).
 
 This repo is intentionally small and public-safe. It contains the local plumbing only:
 
