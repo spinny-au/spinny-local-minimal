@@ -1,0 +1,3 @@
+SPINNY_CONTROL_URL=https://spinny.au
+RELAY_SHARED_SECRET=change-me
+RELAY_CONTROL_TOKEN=change-me

@@ -1,0 +1,11 @@
+name = "spinny-local-relay"
+main = "worker.js"
+compatibility_date = "2026-05-18"
+
+[[durable_objects.bindings]]
+name = "NODE_RELAY"
+class_name = "NodeRelay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["NodeRelay"]

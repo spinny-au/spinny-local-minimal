@@ -1,0 +1,5 @@
+node_modules/
+.env
+.spinny-local/
+*.log
+coverage/
