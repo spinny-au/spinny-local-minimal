@@ -59,49 +59,37 @@ if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
 }
 Write-Ok "Ollama found"
 
-# ── 5. Clone repo ────────────────────────────────────────────────────────────
+# ── 5. Clone or update repo ──────────────────────────────────────────────────
 $InstallDir = "$env:LOCALAPPDATA\SpinnyLocalMinimal"
-Write-Step "Cloning spinny-local-minimal to $InstallDir..."
-if (Test-Path $InstallDir) {
-  Write-Warn "Directory exists — pulling latest..."
+Write-Step "Setting up Spinny Local Minimal..."
+if (Test-Path "$InstallDir\.git") {
+  Write-Warn "Existing install found — updating..."
   git -C $InstallDir pull --ff-only
 } else {
+  if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir }
   git clone https://github.com/foreverdada6126/spinny-local-minimal.git $InstallDir
 }
-Write-Ok "Repo ready"
+Write-Ok "Files ready"
 
-# ── 5b. Install dependencies ─────────────────────────────────────────────────
+# ── 6. Install dependencies (always — idempotent) ────────────────────────────
 Write-Step "Installing dependencies..."
 Set-Location $InstallDir
-npm install --silent
-Write-Ok "Dependencies installed"
+npm install --silent 2>$null
+Write-Ok "Dependencies ready"
 
-# ── 6. Register startup ──────────────────────────────────────────────────────
-Write-Step "Registering startup entry..."
+# ── 7. Register startup ──────────────────────────────────────────────────────
+Write-Step "Registering auto-start on login..."
 $startupDir  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
 $startupPath = Join-Path $startupDir "Spinny Local Minimal.cmd"
-$cmd = "@echo off`r`ncd /d `"$InstallDir`"`r`nnode --experimental-sqlite src/main.js status | findstr /C:`"paired`": true`" >nul 2>&1`r`nif %errorlevel% equ 0 npm start >> `"%LOCALAPPDATA%\SpinnyLocalMinimal\spinny-local.log`" 2>&1`r`n"
+$cmd = "@echo off`r`ncd /d `"$InstallDir`"`r`nnpm start >> `"%LOCALAPPDATA%\SpinnyLocalMinimal\spinny-local.log`" 2>&1`r`n"
 Set-Content -LiteralPath $startupPath -Value $cmd -Encoding ASCII
-Write-Ok "Will auto-start on login once paired"
+Write-Ok "Will start automatically on login"
 
-# ── 7. Run doctor ────────────────────────────────────────────────────────────
-Write-Step "Running health check..."
+# ── 8. Done — launch ─────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "  All done! Starting Spinny now..." -ForegroundColor Green
+Write-Host "  Scan the QR code with your phone to pair this machine." -ForegroundColor White
+Write-Host ""
+
 Set-Location $InstallDir
-node --experimental-sqlite src/main.js doctor
-
-# ── 8. Done ──────────────────────────────────────────────────────────────────
-Write-Host ""
-Write-Host "  Installation complete!" -ForegroundColor Green
-Write-Host ""
-Write-Host "  Next step — pair this node with your Spinny account:" -ForegroundColor White
-Write-Host ""
-Write-Host "    1. Go to https://spinny.au → Settings → Local Node → Create pairing token"
-Write-Host "    2. Run this command (replace the token):"
-Write-Host ""
-Write-Host "       cd `"$InstallDir`"" -ForegroundColor Yellow
-Write-Host "       node --experimental-sqlite src/main.js pair --token <your-token>" -ForegroundColor Yellow
-Write-Host ""
-Write-Host "    3. Then start:"
-Write-Host ""
-Write-Host "       npm start" -ForegroundColor Yellow
-Write-Host ""
+node --experimental-sqlite --no-warnings src/main.js start

@@ -12,10 +12,10 @@
     "spinny-local": "./src/main.js"
   },
   "scripts": {
-    "start": "node --experimental-sqlite src/main.js start",
-    "pair": "node --experimental-sqlite src/main.js pair",
-    "status": "node --experimental-sqlite src/main.js status",
-    "doctor": "node --experimental-sqlite src/main.js doctor",
+    "start": "node --experimental-sqlite --no-warnings src/main.js start",
+    "pair": "node --experimental-sqlite --no-warnings src/main.js pair",
+    "status": "node --experimental-sqlite --no-warnings src/main.js status",
+    "doctor": "node --experimental-sqlite --no-warnings src/main.js doctor",
     "test": "node --experimental-sqlite test/run.js"
   },
   "dependencies": {
