@@ -2,6 +2,13 @@
 
 Minimal local companion node for Spinny.
 
+## Prerequisites
+
+- **Node.js 22.5+** — [nodejs.org](https://nodejs.org)
+- **Ollama** — [ollama.com](https://ollama.com)
+
+Both must be installed before running the installer or any commands.
+
 This repo is intentionally small and public-safe. It contains the local plumbing only:
 
 - Pairing with `spinny.au`
@@ -32,11 +39,17 @@ No model is downloaded during install. Model management is initiated from the `s
 ## Quick Start
 
 ```powershell
+# 1. Clone and enter the repo
+git clone https://github.com/foreverdada6126/spinny-local-minimal.git
 cd spinny-local-minimal
-npm test
-npm run status
+
+# 2. Check everything is ready
 npm run doctor
+
+# 3. Get a pairing token from spinny.au → Settings → Local Node → Create pairing token
 npm run pair -- --token <pairing-token-from-spinny-au>
+
+# 4. Start the relay connection
 npm start
 ```
 
