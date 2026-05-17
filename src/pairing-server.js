@@ -1,9 +1,17 @@
 import { createServer } from "node:http";
+import qrcode from "qrcode-terminal";
 import { pairNode } from "./pairing.js";
 import { loadState } from "./state.js";
 
 const PORT = 47821;
 const TIMEOUT_MS = 5 * 60 * 1000; // auto-close after 5 minutes
+
+function printPairingQR(url) {
+  console.log("\nScan to pair from your phone or another device:\n");
+  qrcode.generate(url, { small: true });
+  console.log(`\nOr open this URL on any signed-in device:\n${url}\n`);
+  console.log("Waiting for pairing...\n");
+}
 
 const PAGE_SUCCESS = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>Spinny — Paired</title>
@@ -29,7 +37,7 @@ a{color:#7c5cfc;text-decoration:none;font-size:14px}</style></head>
 <a href="https://spinny.au">Return to spinny.au →</a>
 </div></body></html>`;
 
-export function startPairingServer({ onPaired } = {}) {
+export function startPairingServer({ onPaired, pairingPageUrl } = {}) {
   return new Promise((resolve, reject) => {
     const server = createServer(async (req, res) => {
       const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -68,8 +76,8 @@ export function startPairingServer({ onPaired } = {}) {
     });
 
     server.listen(PORT, "127.0.0.1", () => {
-      console.log(`Spinny pairing server ready on http://localhost:${PORT}`);
-      console.log(`Waiting for pairing from spinny.au...`);
+      const url = pairingPageUrl || `https://spinny.au/pair?node=localhost:${PORT}`;
+      printPairingQR(url);
     });
 
     server.on("error", (err) => {

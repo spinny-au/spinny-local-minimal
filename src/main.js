@@ -42,10 +42,9 @@ try {
     const state = loadState();
 
     if (!state.paired) {
-      // Not paired yet — start pairing server and wait
-      console.log("\nThis node is not paired yet.");
-      console.log("Go to https://spinny.au → Settings → Local Node → Pair this machine\n");
+      const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
       const paired = await startPairingServer({
+        pairingPageUrl: `${controlUrl}/pair?node=localhost:${47821}`,
         onPaired: (s) => {
           console.log(`\nPaired! Node ID: ${s.nodeId}`);
           console.log("Starting relay connection...\n");
