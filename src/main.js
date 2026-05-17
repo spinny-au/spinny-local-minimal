@@ -2,11 +2,12 @@
 import { ensureNodeIdentity } from "./identity.js";
 import { ensureVaultKey, Vault } from "./vault.js";
 import { pairNode } from "./pairing.js";
+import { startPairingServer } from "./pairing-server.js";
 import { RelayClient } from "./relay.js";
 import { loadState, saveState } from "./state.js";
 import { runDoctor } from "./doctor.js";
 
-const command = process.argv[2] || "status";
+const command = process.argv[2] || "start";
 
 try {
   if (command === "status") {
@@ -25,6 +26,7 @@ try {
       hasNodePublicKey: Boolean(state.nodePublicKey),
       vault: "ready"
     }, null, 2));
+
   } else if (command === "pair") {
     const token = readFlag("--token");
     const state = await pairNode({ token });
@@ -33,16 +35,40 @@ try {
       nodeId: state.nodeId,
       accountId: state.accountId
     }, null, 2));
+
   } else if (command === "start") {
+    ensureNodeIdentity();
+    ensureVaultKey();
+    const state = loadState();
+
+    if (!state.paired) {
+      // Not paired yet — start pairing server and wait
+      console.log("\nThis node is not paired yet.");
+      console.log("Go to https://spinny.au → Settings → Local Node → Pair this machine\n");
+      const paired = await startPairingServer({
+        onPaired: (s) => {
+          console.log(`\nPaired! Node ID: ${s.nodeId}`);
+          console.log("Starting relay connection...\n");
+        }
+      });
+      if (!paired) {
+        console.log("Pairing timed out. Run 'npm start' again to retry.");
+        process.exit(0);
+      }
+    }
+
+    // Start relay
     const relay = new RelayClient();
     relay.connect();
-    console.log("spinny-local-minimal relay client started");
+    console.log("Spinny local node running.");
+
   } else if (command === "doctor") {
     const checks = await runDoctor();
     console.log(JSON.stringify(checks, null, 2));
     if (checks.some((check) => !check.ok && check.name !== "pairing" && check.name !== "ollama")) {
       process.exitCode = 1;
     }
+
   } else {
     throw new Error(`Unknown command: ${command}`);
   }
