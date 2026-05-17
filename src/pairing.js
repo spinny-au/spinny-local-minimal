@@ -14,7 +14,7 @@ export async function pairNode({ token, controlUrl = process.env.SPINNY_CONTROL_
   };
   const signature = signJson(identity.privateKey, payload);
 
-  const response = await fetch(`${controlUrl.replace(/\/$/, "")}/api/local-nodes/pair`, {
+  const response = await fetch(`${controlUrl.replace(/\/$/, "")}/api/spinny/local-nodes/pair`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ payload, signature })
