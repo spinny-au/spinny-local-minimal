@@ -40,6 +40,12 @@ New-Item -ItemType Directory -Force $InstallDir | Out-Null
 Copy-Item -Recurse -Force "$PSScriptRoot\..\*" $InstallDir
 Write-Host "OK  Files copied"
 
+Write-Host "`nInstalling dependencies..."
+Set-Location $InstallDir
+npm install --silent
+Write-Host "OK  Dependencies installed"
+Set-Location $PSScriptRoot
+
 # Register startup (starts ONLY if already paired)
 $startupDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
 $startupPath = Join-Path $startupDir "Spinny Local Minimal.cmd"

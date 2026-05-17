@@ -70,6 +70,12 @@ if (Test-Path $InstallDir) {
 }
 Write-Ok "Repo ready"
 
+# ── 5b. Install dependencies ─────────────────────────────────────────────────
+Write-Step "Installing dependencies..."
+Set-Location $InstallDir
+npm install --silent
+Write-Ok "Dependencies installed"
+
 # ── 6. Register startup ──────────────────────────────────────────────────────
 Write-Step "Registering startup entry..."
 $startupDir  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
