@@ -56,8 +56,12 @@ try {
       }
     }
 
-    // Start relay
-    const relay = new RelayClient();
+    // Start relay — use values from state if available (set during pairing)
+    const currentState = loadState();
+    const relay = new RelayClient({
+      ...(currentState.relayUrl ? { relayUrl: currentState.relayUrl } : {}),
+      ...(currentState.controlPlanePublicKey ? { controlPlanePublicKey: currentState.controlPlanePublicKey } : {}),
+    });
     relay.connect();
     console.log("Spinny local node running.");
 

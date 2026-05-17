@@ -30,6 +30,8 @@ export async function pairNode({ token, controlUrl = process.env.SPINNY_CONTROL_
     accountId: result.accountId,
     relaySessionToken: result.relaySessionToken,
     relaySessionExpiresAt: result.relaySessionExpiresAt,
-    nodePublicKey: identity.publicKeyDer
+    nodePublicKey: identity.publicKeyDer,
+    controlPlanePublicKey: result.controlPlanePublicKey || null,
+    relayUrl: result.relayUrl || null,
   });
 }
