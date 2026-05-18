@@ -856,7 +856,115 @@ function UpdateTab({ localVersion, remoteVersion }) {
   )
 }
 
-const TABS = ['Status', 'Models', 'Chat', 'System', 'Logs', 'About']
+// ── Vault Tab ──────────────────────────────────────────────────────────────
+const VAULT_PROVIDERS = [
+  { id: 'openai',     label: 'OpenAI',      placeholder: 'sk-...' },
+  { id: 'anthropic',  label: 'Anthropic',   placeholder: 'sk-ant-...' },
+  { id: 'xai',        label: 'xAI / Grok',  placeholder: 'xai-...' },
+  { id: 'openrouter', label: 'OpenRouter',  placeholder: 'sk-or-...' },
+  { id: 'github',     label: 'GitHub',      placeholder: 'ghp_...' },
+]
+
+function VaultTab() {
+  const [keys, setKeys] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [inputs, setInputs] = useState({})
+  const [saving, setSaving] = useState({})
+  const [msg, setMsg] = useState({})
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r = await fetch('/api/vault/keys')
+      const d = await r.json()
+      setKeys(d.keys || [])
+    } catch { setKeys([]) }
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const save = async (provider) => {
+    const key = (inputs[provider] || '').trim()
+    if (!key) return
+    setSaving(p => ({ ...p, [provider]: true }))
+    setMsg(p => ({ ...p, [provider]: '' }))
+    try {
+      const r = await fetch('/api/vault/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, key }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Failed')
+      setMsg(p => ({ ...p, [provider]: `✓ Saved — ${d.preview}` }))
+      setInputs(p => ({ ...p, [provider]: '' }))
+      load()
+    } catch (e) {
+      setMsg(p => ({ ...p, [provider]: `✗ ${e.message}` }))
+    }
+    setSaving(p => ({ ...p, [provider]: false }))
+  }
+
+  const remove = async (provider) => {
+    await fetch(`/api/vault/keys/${provider}`, { method: 'DELETE' })
+    setMsg(p => ({ ...p, [provider]: '' }))
+    load()
+  }
+
+  const stored = new Map(keys.map(k => [k.provider, k]))
+
+  return (
+    <div>
+      <div className="card">
+        <div className="card-title">Local Vault — API Keys</div>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16, lineHeight: 1.6 }}>
+          Keys are encrypted with AES-256-GCM and stored on this machine only.
+          The master key lives in your OS credential store (Windows DPAPI / macOS Keychain).
+          Spinny uses these keys when calling cloud AI providers — they never leave this machine.
+        </p>
+        {VAULT_PROVIDERS.map(p => {
+          const entry = stored.get(p.id)
+          return (
+            <div key={p.id} style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--bg-border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{p.label}</span>
+                {entry && (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--ok)' }}>● {entry.preview}</span>
+                    <button className="btn secondary" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => remove(p.id)}>Remove</button>
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="password"
+                  className="chat-textarea"
+                  style={{ flex: 1, minHeight: 'auto', padding: '7px 10px', fontSize: 12 }}
+                  placeholder={entry ? `Replace current key (${entry.preview})` : p.placeholder}
+                  value={inputs[p.id] || ''}
+                  onChange={e => setInputs(prev => ({ ...prev, [p.id]: e.target.value }))}
+                  onKeyDown={e => e.key === 'Enter' && save(p.id)}
+                />
+                <button className="btn" style={{ flexShrink: 0 }} onClick={() => save(p.id)} disabled={saving[p.id] || !inputs[p.id]?.trim()}>
+                  {saving[p.id] ? '…' : 'Save'}
+                </button>
+              </div>
+              {msg[p.id] && (
+                <div style={{ fontSize: 11, marginTop: 5, color: msg[p.id].startsWith('✓') ? 'var(--ok)' : 'var(--err)' }}>
+                  {msg[p.id]}
+                </div>
+              )}
+            </div>
+          )
+        })}
+        {loading && <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Loading…</div>}
+      </div>
+    </div>
+  )
+}
+
+const TABS = ['Status', 'Models', 'Chat', 'Vault', 'System', 'Logs', 'About']
 
 export function App() {
   const [tab, setTab] = useState('Status')
@@ -892,6 +1000,7 @@ export function App() {
           {tab === 'Status' && <StatusTab status={status} sysInfo={sysInfo} error={statusErr} />}
           {tab === 'Models' && <ModelsTab sysInfo={sysInfo} error={sysErr} downloads={dlData || {}} />}
           {tab === 'Chat'   && <ChatTab sysInfo={sysInfo} />}
+          {tab === 'Vault'  && <VaultTab />}
           {tab === 'System' && <SystemTab sysInfo={sysInfo} error={sysErr} />}
           {tab === 'Logs'  && <LogsTab />}
           {tab === 'About' && <AboutTab sysInfo={sysInfo} />}

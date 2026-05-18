@@ -10,8 +10,39 @@ import { loadState } from './state.js'
 import { pairNodeDirect } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
 import { getLines } from './log-buffer.js'
+import { Vault } from './vault.js'
 
 const downloads = new Map() // model -> { status, progress, done, success, startedAt }
+
+const VAULT_NS = 'byok'
+const SPINNY_ORIGIN = 'https://spinny.au'
+
+const CLOUD_APIS = {
+  openai:      { url: 'https://api.openai.com/v1/chat/completions',       format: 'openai'    },
+  xai:         { url: 'https://api.x.ai/v1/chat/completions',             format: 'openai'    },
+  openrouter:  { url: 'https://openrouter.ai/api/v1/chat/completions',    format: 'openai'    },
+  anthropic:   { url: 'https://api.anthropic.com/v1/messages',            format: 'anthropic' },
+}
+
+function maskKey(key) {
+  if (!key || key.length < 8) return '****'
+  return key.slice(0, 8) + '****'
+}
+
+function corsSpinny(res) {
+  res.setHeader('Access-Control-Allow-Origin', SPINNY_ORIGIN)
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  res.setHeader('Vary', 'Origin')
+}
+
+function isTrustedOrigin(req) {
+  const origin = req.headers.origin || ''
+  return !origin
+    || origin === SPINNY_ORIGIN
+    || origin.startsWith(`http://localhost:${PORT}`)
+    || origin.startsWith(`http://127.0.0.1:${PORT}`)
+}
 
 const PORT = 47821
 const UI_DIST = join(import.meta.dirname, '..', 'ui', 'dist')
@@ -59,7 +90,12 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`)
 
-    if (req.method === 'OPTIONS') { cors(res); res.writeHead(204); return res.end() }
+    if (req.method === 'OPTIONS') {
+      const p = url.pathname
+      if (p.startsWith('/api/vault/') || p === '/api/cloud-chat') corsSpinny(res)
+      else cors(res)
+      res.writeHead(204); return res.end()
+    }
 
     // Health (used by spinny.au browser fetch)
     if (url.pathname === '/health') {
@@ -287,6 +323,138 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         install.on('close', (c) => { send({ done: true, success: c === 0 }); res.end() })
       })
       req.on('close', () => pull.kill())
+      return
+    }
+
+    // ── Vault: list stored providers (masked) ─────────────────────────────
+    if (url.pathname === '/api/vault/keys' && req.method === 'GET') {
+      corsSpinny(res)
+      const vault = new Vault()
+      try {
+        const items = vault.list(VAULT_NS, 50)
+        const keys = items.map(({ key: provider, value }) => ({
+          provider,
+          preview: value?.key ? maskKey(value.key) : '****',
+          storedAt: value?.storedAt || null,
+        }))
+        return json(res, { keys })
+      } finally { vault.close() }
+    }
+
+    // ── Vault: store a key ────────────────────────────────────────────────
+    if (url.pathname === '/api/vault/keys' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403)
+      corsSpinny(res)
+      let body = ''
+      req.on('data', d => { body += d })
+      req.on('end', () => {
+        let parsed
+        try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400) }
+        const { provider, key } = parsed
+        if (!provider || !key) return json(res, { error: 'provider and key required' }, 400)
+        if (!/^[\w-]+$/.test(provider)) return json(res, { error: 'Invalid provider name' }, 400)
+        if (key.length < 8) return json(res, { error: 'Key too short' }, 400)
+        const vault = new Vault()
+        try {
+          vault.put(VAULT_NS, provider, { key, storedAt: new Date().toISOString() })
+          return json(res, { ok: true, provider, preview: maskKey(key) })
+        } finally { vault.close() }
+      })
+      return
+    }
+
+    // ── Vault: delete a key ───────────────────────────────────────────────
+    const vaultDel = url.pathname.match(/^\/api\/vault\/keys\/([\w-]+)$/)
+    if (vaultDel && req.method === 'DELETE') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403)
+      corsSpinny(res)
+      const provider = vaultDel[1]
+      const vault = new Vault()
+      try {
+        vault.db.prepare('DELETE FROM encrypted_items WHERE namespace = ? AND item_key = ?').run(VAULT_NS, provider)
+        return json(res, { ok: true, provider })
+      } finally { vault.close() }
+    }
+
+    // ── Cloud chat: use vault key to call AI provider, stream SSE ─────────
+    if (url.pathname === '/api/cloud-chat' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403)
+      corsSpinny(res)
+      let body = ''
+      req.on('data', d => { body += d })
+      req.on('end', async () => {
+        let parsed
+        try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400) }
+        const { provider, model, messages } = parsed
+        if (!provider || !model || !Array.isArray(messages)) return json(res, { error: 'provider, model and messages required' }, 400)
+        if (!CLOUD_APIS[provider]) return json(res, { error: `Unknown provider: ${provider}` }, 400)
+
+        const vault = new Vault()
+        let apiKey
+        try {
+          const entry = vault.get(VAULT_NS, provider)
+          apiKey = entry?.key
+        } finally { vault.close() }
+        if (!apiKey) return json(res, { error: `No vault key stored for: ${provider}` }, 401)
+
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
+        const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
+
+        try {
+          const api = CLOUD_APIS[provider]
+          if (api.format === 'anthropic') {
+            const r = await fetch(api.url, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+              body: JSON.stringify({ model, messages, max_tokens: 8096, stream: true }),
+            })
+            if (!r.ok) { send({ error: `Anthropic ${r.status}: ${await r.text()}` }); return res.end() }
+            const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''
+            while (true) {
+              const { done, value } = await reader.read(); if (done) break
+              buf += dec.decode(value, { stream: true })
+              const lines = buf.split('\n'); buf = lines.pop() ?? ''
+              for (const line of lines) {
+                if (!line.startsWith('data:')) continue
+                const d = line.slice(5).trim(); if (!d) continue
+                try {
+                  const evt = JSON.parse(d)
+                  if (evt.type === 'content_block_delta' && evt.delta?.text) send({ content: evt.delta.text, done: false })
+                  else if (evt.type === 'message_stop') send({ content: '', done: true })
+                } catch {}
+              }
+            }
+          } else {
+            // OpenAI-compatible (openai, xai, openrouter)
+            const headers = { 'content-type': 'application/json', 'authorization': `Bearer ${apiKey}` }
+            if (provider === 'openrouter') { headers['http-referer'] = 'https://spinny.au'; headers['x-title'] = 'Spinny' }
+            const r = await fetch(api.url, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ model, messages, stream: true }),
+            })
+            if (!r.ok) { send({ error: `${provider} ${r.status}: ${await r.text()}` }); return res.end() }
+            const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''
+            while (true) {
+              const { done, value } = await reader.read(); if (done) break
+              buf += dec.decode(value, { stream: true })
+              const lines = buf.split('\n'); buf = lines.pop() ?? ''
+              for (const line of lines) {
+                if (!line.startsWith('data:')) continue
+                const d = line.slice(5).trim(); if (!d || d === '[DONE]') { send({ content: '', done: true }); continue }
+                try {
+                  const chunk = JSON.parse(d)
+                  const content = chunk.choices?.[0]?.delta?.content
+                  const finished = chunk.choices?.[0]?.finish_reason != null
+                  if (content) send({ content, done: false })
+                  if (finished) send({ content: '', done: true })
+                } catch {}
+              }
+            }
+          }
+        } catch (err) { send({ error: err.message }) }
+        if (!res.writableEnded) res.end()
+      })
       return
     }
 
