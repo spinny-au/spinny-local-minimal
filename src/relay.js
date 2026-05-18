@@ -1,18 +1,14 @@
 import { EventEmitter } from "node:events";
 import { ensureNodeIdentity, signJson, verifyJson } from "./identity.js";
-import { loadState } from "./state.js";
+import { loadState, saveState } from "./state.js";
 import { handleTask } from "./tasks.js";
 import { assertFreshIssuedAt, nodeHello } from "./protocol.js";
 
 function derivedRelayUrl(state) {
-  if (state?.relayUrl) return state.relayUrl
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
-  const ctrl = state?.controlUrl || process.env.SPINNY_CONTROL_URL || ''
-  if (ctrl) {
-    const ws = ctrl.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/$/, '')
-    return `${ws}/api/local-nodes/relay/node`
-  }
-  return null
+  const ctrl = state?.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au'
+  const ws = ctrl.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/$/, '')
+  return `${ws}/api/local-nodes/relay/node`
 }
 
 function logRelay(message, detail = null) {
@@ -26,6 +22,28 @@ function safeReason(event) {
   return ''
 }
 
+function isInternalHostname(url) {
+  try {
+    const { hostname } = new URL(url)
+    const host = hostname.toLowerCase()
+    if (!host.includes('.')) return true
+    const parts = host.split('.').map((part) => Number.parseInt(part, 10))
+    if (parts.length !== 4 || parts.some((part) => Number.isNaN(part))) return false
+    if (parts[0] === 10) return true
+    if (parts[0] === 192 && parts[1] === 168) return true
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
+    return false
+  } catch {
+    return false
+  }
+}
+
+function skipInternalRelayUrl(url, target = 'control plane') {
+  if (!url || !isInternalHostname(url)) return false
+  logRelay(`skipping internal relay URL ${url} - falling back to ${target}`)
+  return true
+}
+
 async function fetchRelayUrl(state) {
   // Ask the control plane — works for nodes paired before relayUrl was stored
   const ctrl = state?.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au'
@@ -34,10 +52,20 @@ async function fetchRelayUrl(state) {
     const res = await fetch(`${base}/api/spinny/local-nodes/relay-url`)
     if (res.ok) {
       const data = await res.json()
-      if (data?.relayUrl) return data.relayUrl
+      if (data?.relayUrl && !skipInternalRelayUrl(data.relayUrl, 'derived control-plane URL')) return data.relayUrl
     }
   } catch {}
-  return 'wss://relay.spinny.au/node'
+  return null
+}
+
+async function resolveRelayUrl(state, explicitRelayUrl) {
+  if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
+  if (explicitRelayUrl && !skipInternalRelayUrl(explicitRelayUrl, 'control plane')) return explicitRelayUrl
+  if (state?.relayUrl && !skipInternalRelayUrl(state.relayUrl, 'control plane')) return state.relayUrl
+  if (state?.relayUrl && isInternalHostname(state.relayUrl)) {
+    saveState({ ...state, relayUrl: null })
+  }
+  return await fetchRelayUrl(state) || derivedRelayUrl(state)
 }
 
 export class RelayClient extends EventEmitter {
@@ -64,7 +92,7 @@ export class RelayClient extends EventEmitter {
     const state = loadState();
     if (!state.paired) throw new Error("Pair node before connecting to relay");
     const identity = ensureNodeIdentity();
-    const url = this.relayUrl || state.relayUrl || process.env.SPINNY_RELAY_URL || await fetchRelayUrl(state) || derivedRelayUrl(state);
+    const url = await resolveRelayUrl(state, this.relayUrl);
     this.relayUrl = url; // cache for reconnects
     logRelay(`connecting to ${url}`);
     const socket = new WebSocket(url);
