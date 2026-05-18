@@ -281,10 +281,17 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
         const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
         try {
+          // keep_alive=-1: model stays loaded in RAM indefinitely (no cold-start penalty)
+          // think=false: disable qwen3/deepseek chain-of-thought for fast responses
+          const isThinkingModel = /qwen3|deepseek-r|qwq/i.test(model)
           const ollamaRes = await fetch('http://localhost:11434/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, messages, stream: true }),
+            body: JSON.stringify({
+              model, messages, stream: true,
+              keep_alive: -1,
+              ...(isThinkingModel ? { think: false } : {}),
+            }),
           })
           if (!ollamaRes.ok) { send({ error: `Ollama error ${ollamaRes.status}: is the model installed?` }); return res.end() }
           const reader = ollamaRes.body.getReader()
@@ -300,7 +307,10 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
               if (!line.trim()) continue
               try {
                 const chunk = JSON.parse(line)
-                send({ content: chunk.message?.content ?? '', done: chunk.done ?? false })
+                // strip <think>...</think> blocks that leak through even with think:false
+                const raw = chunk.message?.content ?? ''
+                const content = raw.replace(/<think>[\s\S]*?<\/think>/g, '').trimStart()
+                send({ content, done: chunk.done ?? false })
               } catch {}
             }
           }
