@@ -12,10 +12,11 @@
     "spinny-local": "./src/main.js"
   },
   "scripts": {
-    "start": "node --experimental-sqlite --no-warnings src/main.js start",
-    "pair": "node --experimental-sqlite --no-warnings src/main.js pair",
-    "status": "node --experimental-sqlite --no-warnings src/main.js status",
-    "doctor": "node --experimental-sqlite --no-warnings src/main.js doctor",
+    "start": "node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js start",
+    "pair": "node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js pair",
+    "status": "node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js status",
+    "doctor": "node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js doctor",
+    "repair": "node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js repair",
     "test": "node --experimental-sqlite test/run.js",
     "build:ui": "cd ui && npm install && npm run build",
     "start:bg": "powershell -ExecutionPolicy Bypass -File scripts\\start-background.ps1",

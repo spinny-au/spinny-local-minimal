@@ -119,6 +119,12 @@ try {
 
     console.log("Spinny local node running.");
 
+  } else if (command === "repair") {
+    const state = loadState();
+    const relayUrl = process.env.SPINNY_RELAY_URL || null;
+    const updated = saveState({ ...state, relayUrl });
+    console.log(JSON.stringify({ relayUrl: updated.relayUrl || '(will auto-discover on next start)' }, null, 2));
+
   } else if (command === "doctor") {
     const checks = await runDoctor();
     console.log(JSON.stringify(checks, null, 2));
