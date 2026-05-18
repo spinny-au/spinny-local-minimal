@@ -415,23 +415,48 @@ function ModelsTab({ sysInfo, error }) {
     const m = model || installModel.trim()
     if (!m) return
     setInstalling(true)
-    setInstallMsg(null)
+    setInstallMsg({ type: 'ok', text: `Connecting…` })
     try {
       const r = await fetch('/api/models/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: m }),
       })
-      const d = await r.json()
-      if (d.ok) {
-        setInstallMsg({ type: 'ok', text: `Installing ${m}... This may take a few minutes. Ollama is downloading it in the background.` })
-        setInstallModel('')
-      } else {
-        setInstallMsg({ type: 'err', text: d.error || 'Install failed' })
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        throw new Error(d.error || `HTTP ${r.status}`)
+      }
+      const reader = r.body?.getReader()
+      if (!reader) throw new Error('No response stream')
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const parts = buf.split('\n\n')
+        buf = parts.pop() ?? ''
+        for (const part of parts) {
+          const line = part.replace(/^data: /, '').trim()
+          if (!line) continue
+          try {
+            const evt = JSON.parse(line)
+            if (evt.done) {
+              if (evt.success) {
+                setInstallMsg({ type: 'ok', text: `✓ ${m} installed` })
+                setInstallModel('')
+              } else {
+                setInstallMsg({ type: 'err', text: 'Install failed' })
+              }
+              setInstalling(false)
+            } else if (evt.status) {
+              setInstallMsg({ type: 'ok', text: evt.status })
+            }
+          } catch { /* ignore parse errors */ }
+        }
       }
     } catch (e) {
       setInstallMsg({ type: 'err', text: e.message })
-    } finally {
       setInstalling(false)
     }
   }
