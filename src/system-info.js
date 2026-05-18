@@ -11,12 +11,11 @@ export function getSystemInfo() {
 
   let gpu = 'Not detected'
   try {
-    const out = execSync('nvidia-smi --query-gpu=name --format=csv,noheader', { timeout: 3000 }).toString().trim()
+    const out = execSync('nvidia-smi --query-gpu=name --format=csv,noheader', { timeout: 3000, stdio: 'pipe' }).toString().trim()
     if (out) gpu = out.split('\n')[0].trim()
   } catch {
     try {
-      // AMD or Intel check via wmic on Windows
-      const out = execSync('wmic path win32_VideoController get name /value', { timeout: 3000 }).toString()
+      const out = execSync('wmic path win32_VideoController get name /value', { timeout: 3000, stdio: 'pipe' }).toString()
       const match = out.match(/Name=(.+)/)
       if (match) gpu = match[1].trim()
     } catch {}
