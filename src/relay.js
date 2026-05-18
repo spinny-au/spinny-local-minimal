@@ -6,9 +6,7 @@ import { assertFreshIssuedAt, nodeHello } from "./protocol.js";
 
 function derivedRelayUrl(state) {
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
-  const ctrl = state?.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au'
-  const ws = ctrl.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/$/, '')
-  return `${ws}/api/local-nodes/relay/node`
+  return 'wss://relay.spinny.au/node'
 }
 
 function logRelay(message, detail = null) {
