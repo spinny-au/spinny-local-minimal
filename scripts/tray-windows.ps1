@@ -23,10 +23,13 @@ function New-IconFromBase64([string]$Path) {
   if ($raw.StartsWith("data:image")) {
     $raw = $raw.Substring($raw.IndexOf(",") + 1)
   }
-  $bytes = [Convert]::FromBase64String($raw)
+  $bytes  = [Convert]::FromBase64String($raw)
   $stream = New-Object System.IO.MemoryStream(,$bytes)
   $bitmap = New-Object System.Drawing.Bitmap($stream)
-  $hicon = $bitmap.GetHicon()
+  # Scale to 16x16 — Windows tray clips larger bitmaps instead of scaling
+  $size   = [System.Windows.Forms.SystemInformation]::SmallIconSize
+  $scaled = New-Object System.Drawing.Bitmap($bitmap, $size)
+  $hicon  = $scaled.GetHicon()
   return [System.Drawing.Icon]::FromHandle($hicon)
 }
 
