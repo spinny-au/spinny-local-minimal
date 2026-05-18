@@ -207,6 +207,31 @@ const css = `
 }
 .link-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+.pairing-code-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pairing-code {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pairing-code-value {
+  font-family: monospace;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--bg-border);
+  border-radius: var(--radius);
+  padding: 12px 20px;
+  flex: 1;
+  text-align: center;
+}
+.pairing-hint { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+
 .loading { color: var(--text-muted); font-size: 13px; padding: 40px; text-align: center; }
 .error-banner {
   background: rgba(239,68,68,0.1);
@@ -274,6 +299,29 @@ function BarRow({ label, used, total }) {
   )
 }
 
+function PairingCode({ code }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+  const controlUrl = 'https://spinny.au'
+  const pairingUrl = `${controlUrl}/?localcode=${code}`
+  return (
+    <div className="pairing-code-wrap">
+      <div className="pairing-code">
+        <div className="pairing-code-value">{code}</div>
+        <button className="btn" onClick={copy}>{copied ? 'Copied!' : 'Copy'}</button>
+      </div>
+      <div className="pairing-hint">
+        Enter this code at <a href={pairingUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>spinny.au → Settings → Local Node</a>, or open that link on any signed-in device.
+      </div>
+    </div>
+  )
+}
+
 function StatusTab({ status, sysInfo, error }) {
   if (error) return <div className="error-banner">Could not connect to local server: {error}</div>
   if (!status) return <div className="loading">Loading status...</div>
@@ -311,10 +359,14 @@ function StatusTab({ status, sysInfo, error }) {
       {!status.paired && (
         <div className="card">
           <div className="card-title">Pairing</div>
-          <p style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.6 }}>
-            This node is not yet paired. Run <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>npm start</code> to get a pairing code, then visit{' '}
-            <a href="https://spinny.au" style={{ color: 'var(--accent)' }}>spinny.au</a> to complete pairing.
-          </p>
+          {status.pairingCode ? (
+            <PairingCode code={status.pairingCode} />
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.6 }}>
+              No pairing code yet. Run <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>npm start</code> to generate one, then enter it at{' '}
+              <a href="https://spinny.au" style={{ color: 'var(--accent)' }}>spinny.au</a>.
+            </p>
+          )}
         </div>
       )}
     </>
