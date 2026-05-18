@@ -4,7 +4,7 @@ import { ensureVaultKey, Vault } from "./vault.js";
 import { pairNode } from "./pairing.js";
 import { startPairingServer } from "./pairing-server.js";
 import { RelayClient } from "./relay.js";
-import { loadState, saveState } from "./state.js";
+import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
 
 const command = process.argv[2] || "start";
@@ -42,6 +42,16 @@ try {
     const state = loadState();
 
     if (!state.paired) {
+      // Generate and persist a pairing code if not already set
+      if (!state.pairingCode) {
+        state = saveState({ ...state, pairingCode: generatePairingCode() });
+      }
+      const code = state.pairingCode;
+      console.log("\n┌─────────────────────────────────────┐");
+      console.log(`│  Pairing code:  ${code.padEnd(20)}│`);
+      console.log("│  Enter it on spinny.au → Local Node  │");
+      console.log("└─────────────────────────────────────┘\n");
+
       const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
       const paired = await startPairingServer({
         pairingPageUrl: `${controlUrl}/pair?node=localhost:${47821}`,

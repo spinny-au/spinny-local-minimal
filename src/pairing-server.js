@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import qrcode from "qrcode-terminal";
-import { pairNode } from "./pairing.js";
+import { pairNode, pairNodeDirect } from "./pairing.js";
 import { loadState } from "./state.js";
 
 const PORT = 47821;
@@ -49,13 +49,9 @@ export function startPairingServer({ onPaired, pairingPageUrl } = {}) {
         return res.end(JSON.stringify({ ok: true, nodeId: state.nodeId, paired: state.paired }));
       }
 
-      // Pairing endpoint — spinny.au redirects here with the token
-      if (url.pathname === "/pair") {
+      // Legacy token-based pairing — spinny.au redirects here with a server-issued token
+      if (url.pathname === "/pair" && url.searchParams.has("token")) {
         const token = url.searchParams.get("token");
-        if (!token) {
-          res.writeHead(400, { "Content-Type": "text/html" });
-          return res.end(PAGE_ERROR("Missing pairing token."));
-        }
         try {
           const state = await pairNode({ token });
           res.writeHead(200, { "Content-Type": "text/html" });
@@ -67,6 +63,45 @@ export function startPairingServer({ onPaired, pairingPageUrl } = {}) {
         } catch (err) {
           res.writeHead(400, { "Content-Type": "text/html" });
           res.end(PAGE_ERROR(err.message));
+        }
+        return;
+      }
+
+      // Code-based pairing — browser sends pairing code + user email (no server session needed)
+      if (url.pathname === "/pair-direct") {
+        const code = url.searchParams.get("code");
+        const email = url.searchParams.get("email");
+        const corsHeaders = {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Content-Type": "application/json",
+        };
+
+        if (req.method === "OPTIONS") {
+          res.writeHead(204, corsHeaders);
+          return res.end();
+        }
+
+        const state = loadState();
+        if (!code || code.toUpperCase() !== (state.pairingCode || "").toUpperCase()) {
+          res.writeHead(400, corsHeaders);
+          return res.end(JSON.stringify({ error: "Invalid pairing code" }));
+        }
+        if (!email || !email.includes("@")) {
+          res.writeHead(400, corsHeaders);
+          return res.end(JSON.stringify({ error: "Valid email required" }));
+        }
+        try {
+          const result = await pairNodeDirect({ accountEmail: email });
+          res.writeHead(200, corsHeaders);
+          res.end(JSON.stringify({ ok: true, nodeId: result.nodeId }));
+          server.close();
+          clearTimeout(timeout);
+          onPaired?.(result);
+          resolve(result);
+        } catch (err) {
+          res.writeHead(500, corsHeaders);
+          res.end(JSON.stringify({ error: err.message }));
         }
         return;
       }
