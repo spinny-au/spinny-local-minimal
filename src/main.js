@@ -46,6 +46,10 @@ try {
 
     let relayConnected = false;
 
+    // Suppress unhandled rejections from systray2's internal async init —
+    // the tray is optional and must never crash the main process.
+    process.on('unhandledRejection', () => {});
+
     // Start local panel server immediately — available before and after pairing
     let pairingResolver = null;
     startLocalServer({
@@ -56,9 +60,6 @@ try {
         pairingResolver?.(result);
       }
     });
-
-    // Start system tray immediately — shows "Pairing needed" until paired
-    startTray({ getStatus: () => ({ relayConnected }) });
 
     if (!state.paired) {
       if (!state.pairingCode) {
@@ -79,6 +80,9 @@ try {
       console.log(`\nOr open this URL on any signed-in device:\n${pairingUrl}\n`);
       console.log("Waiting for pairing (5 min timeout)...\n");
 
+      // Start tray AFTER printing QR so a tray crash can't suppress output
+      startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
+
       const TIMEOUT_MS = 5 * 60 * 1000;
       const pairingPromise = new Promise(resolve => { pairingResolver = resolve });
       const paired = await Promise.race([
@@ -90,6 +94,9 @@ try {
         console.log("Pairing timed out. Run 'npm start' again to retry.");
         process.exit(0);
       }
+    } else {
+      // Already paired — start tray immediately
+      startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
     }
 
     // Start relay — use values from state if available (set during pairing)
