@@ -2,6 +2,10 @@ import { createServer } from 'node:http'
 import { readFileSync, existsSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
+
+const _require = createRequire(import.meta.url)
+const LOCAL_VERSION = (() => { try { return _require('../package.json').version } catch { return '0.0.0' } })()
 import { loadState } from './state.js'
 import { pairNodeDirect } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
@@ -170,6 +174,41 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         res.writeHead(500, corsHeaders)
         res.end(JSON.stringify({ error: err.message }))
       }
+      return
+    }
+
+    // Check for updates — compare local version to GitHub package.json
+    if (url.pathname === '/api/update/check' && req.method === 'GET') {
+      try {
+        const ghRes = await fetch('https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/package.json')
+        const ghPkg = await ghRes.json()
+        const remoteVersion = ghPkg.version || '0.0.0'
+        return json(res, { updateAvailable: remoteVersion !== LOCAL_VERSION, localVersion: LOCAL_VERSION, remoteVersion })
+      } catch (err) {
+        return json(res, { updateAvailable: false, localVersion: LOCAL_VERSION, error: err.message })
+      }
+    }
+
+    // Apply update — git pull + npm install, streamed as SSE
+    if (url.pathname === '/api/update/apply' && req.method === 'POST') {
+      cors(res)
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
+      const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`)
+      const cwd = join(import.meta.dirname, '..')
+      send({ status: 'Pulling latest code…' })
+      const pull = spawn('git', ['pull', 'origin', 'main'], { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+      const onChunk = (chunk) => chunk.toString().split('\n').filter(l => l.trim()).forEach(l => send({ status: l }))
+      pull.stdout.on('data', onChunk)
+      pull.stderr.on('data', onChunk)
+      pull.on('close', (code) => {
+        if (code !== 0) { send({ done: true, success: false }); return res.end() }
+        send({ status: 'Installing dependencies…' })
+        const install = spawn('npm', ['install', '--omit=dev'], { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+        install.stdout.on('data', onChunk)
+        install.stderr.on('data', onChunk)
+        install.on('close', (c) => { send({ done: true, success: c === 0 }); res.end() })
+      })
+      req.on('close', () => pull.kill())
       return
     }
 

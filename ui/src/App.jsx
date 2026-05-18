@@ -37,6 +37,8 @@ const css = `
 }
 .tab-btn:hover { background: var(--accent-soft); color: var(--text); }
 .tab-btn.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.tab-btn.update-tab { color: var(--ok); font-weight: 600; }
+.tab-btn.update-tab:hover { background: rgba(34,197,94,0.1); color: var(--ok); }
 
 .content { flex: 1; padding: 24px; max-width: 800px; margin: 0 auto; width: 100%; }
 
@@ -631,13 +633,73 @@ function AboutTab({ sysInfo }) {
         <a className="link-btn" href="https://github.com/spinny-au/spinny-local-minimal" target="_blank" rel="noreferrer">
           GitHub
         </a>
-        <button className="btn" style={{ marginTop: 8 }} onClick={() => window.open('https://spinny.au', '_blank')}>
-          Open spinny.au
-        </button>
       </div>
       <p style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 32, lineHeight: 1.6, maxWidth: 360 }}>
         Spinny Local runs on your machine and connects your AI models to the Spinny cloud platform. It manages Ollama models, relays tasks, and keeps your data local.
       </p>
+    </div>
+  )
+}
+
+function UpdateTab({ localVersion, remoteVersion }) {
+  const [status, setStatus] = useState(null)
+  const [updating, setUpdating] = useState(false)
+  const [done, setDone] = useState(false)
+
+  async function doUpdate() {
+    setUpdating(true)
+    setStatus('Starting update…')
+    try {
+      const r = await fetch('/api/update/apply', { method: 'POST' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const reader = r.body?.getReader()
+      if (!reader) throw new Error('No stream')
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done: d, value } = await reader.read()
+        if (d) break
+        buf += decoder.decode(value, { stream: true })
+        const parts = buf.split('\n\n')
+        buf = parts.pop() ?? ''
+        for (const part of parts) {
+          const line = part.replace(/^data: /, '').trim()
+          if (!line) continue
+          try {
+            const evt = JSON.parse(line)
+            if (evt.done) {
+              setDone(true)
+              setStatus(evt.success ? '✓ Update complete — please restart Spinny Local.' : '✗ Update failed.')
+              setUpdating(false)
+            } else if (evt.status) {
+              setStatus(evt.status)
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    } catch (e) {
+      setStatus('Error: ' + e.message)
+      setUpdating(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title">Update Available</div>
+      <div className="row">
+        <span className="row-label">Installed</span>
+        <span className="row-value">{localVersion}</span>
+      </div>
+      <div className="row">
+        <span className="row-label">Latest</span>
+        <span className="row-value" style={{ color: 'var(--ok)' }}>{remoteVersion}</span>
+      </div>
+      <div style={{ marginTop: 16 }}>
+        <button className="btn" onClick={doUpdate} disabled={updating || done}>
+          {updating ? 'Updating…' : done ? 'Restart to finish' : 'Update Now'}
+        </button>
+        {status && <div className={`msg ${done ? 'ok' : 'ok'}`} style={{ marginTop: 10 }}>{status}</div>}
+      </div>
     </div>
   )
 }
@@ -648,6 +710,9 @@ export function App() {
   const [tab, setTab] = useState('Status')
   const { data: status, error: statusErr } = usePoll('/api/status', 5000)
   const { data: sysInfo, error: sysErr } = usePoll('/api/system', 5000)
+  const { data: updateInfo } = usePoll('/api/update/check', 5 * 60 * 1000)
+  const hasUpdate = updateInfo?.updateAvailable
+  const tabs = hasUpdate ? [...TABS, 'Update'] : TABS
 
   return (
     <>
@@ -659,13 +724,13 @@ export function App() {
             <div className="header-sub">localhost:47821</div>
           </div>
           <div className="tabs">
-            {TABS.map(t => (
+            {tabs.map(t => (
               <button
                 key={t}
-                className={`tab-btn${tab === t ? ' active' : ''}`}
+                className={`tab-btn${tab === t ? ' active' : ''}${t === 'Update' ? ' update-tab' : ''}`}
                 onClick={() => setTab(t)}
               >
-                {t}
+                {t === 'Update' ? '⬆ Update' : t}
               </button>
             ))}
           </div>
@@ -676,6 +741,7 @@ export function App() {
           {tab === 'System' && <SystemTab sysInfo={sysInfo} error={sysErr} />}
           {tab === 'Logs'  && <LogsTab />}
           {tab === 'About' && <AboutTab sysInfo={sysInfo} />}
+          {tab === 'Update' && <UpdateTab localVersion={updateInfo?.localVersion} remoteVersion={updateInfo?.remoteVersion} />}
         </div>
       </div>
     </>
