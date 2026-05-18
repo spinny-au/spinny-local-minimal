@@ -159,10 +159,14 @@ Write-Step "Setting up Spinny Local Minimal..."
 if ($fresh) {
   Write-Warn "Stopping any running Spinny process..."
   Stop-SpinnyProcess
-  Set-Location $env:USERPROFILE  # move out of InstallDir before deleting it
+  # Kill any remaining node processes that may hold file handles
+  & taskkill /F /IM node.exe /T 2>$null
+  Start-Sleep -Seconds 2
+  Set-Location $env:USERPROFILE
   if (Test-Path $InstallDir) {
     Write-Warn "Removing existing install..."
-    Remove-Item -Recurse -Force $InstallDir
+    # Use cmd rmdir — more aggressive than Remove-Item, releases OS directory handles
+    & cmd /c rmdir /s /q $InstallDir
   }
   if (Test-Path $StateFile) {
     Write-Warn "Clearing pairing state..."
