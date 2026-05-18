@@ -136,9 +136,11 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         downloads.set(model, { status: `Starting download: ${model}`, progress: null, done: false, success: false, startedAt: Date.now() })
         safeSend({ status: `Starting download: ${model}` })
 
+        const stripAnsi = s => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\r/g, '')
+
         const proc = spawn('ollama', ['pull', model], { stdio: ['ignore', 'pipe', 'pipe'] })
         const onData = (chunk) => {
-          const lines = chunk.toString().split('\n').filter(l => l.trim())
+          const lines = chunk.toString().split(/\r?\n/).map(stripAnsi).filter(l => l.trim())
           for (const line of lines) {
             const pct = line.match(/(\d+)%/)
             const progress = pct ? parseInt(pct[1]) : (downloads.get(model)?.progress ?? null)
