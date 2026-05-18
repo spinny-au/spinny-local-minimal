@@ -88,7 +88,7 @@ export class NodeRelay {
   async verifyNodeHello(envelope) {
     const env = this.env;
     if (!env.SPINNY_CONTROL_URL || !env.RELAY_SHARED_SECRET) return true;
-    const response = await fetch(`${env.SPINNY_CONTROL_URL.replace(/\/$/, "")}/api/local-nodes/relay-session/verify`, {
+    const response = await fetch(`${env.SPINNY_CONTROL_URL.replace(/\/$/, "")}/api/spinny/local-nodes/relay-session/verify`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -106,7 +106,7 @@ export class NodeRelay {
     if (env.RELAY_SHARED_SECRET) {
       headers.authorization = `Bearer ${env.RELAY_SHARED_SECRET}`;
     }
-    await fetch(`${env.SPINNY_CONTROL_URL.replace(/\/$/, "")}/api/local-nodes/${encodeURIComponent(nodeId)}/health`, {
+    await fetch(`${env.SPINNY_CONTROL_URL.replace(/\/$/, "")}/api/spinny/local-nodes/${encodeURIComponent(nodeId)}/health`, {
       method: "POST",
       headers,
       body: JSON.stringify({ health: payload.health || null })
