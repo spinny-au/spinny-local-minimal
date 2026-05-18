@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { ensureNodeIdentity, signJson, verifyJson } from "./identity.js";
 import { loadState } from "./state.js";
 import { handleTask } from "./tasks.js";
@@ -28,13 +29,14 @@ async function fetchRelayUrl(state) {
   return 'wss://relay.spinny.au/node'
 }
 
-export class RelayClient {
+export class RelayClient extends EventEmitter {
   constructor({
     relayUrl,
     controlPlanePublicKey = process.env.SPINNY_CONTROL_PLANE_PUBLIC_KEY,
     allowUnsignedTasks = process.env.SPINNY_ALLOW_UNSIGNED_TASKS === "1",
     reconnect = true
   } = {}) {
+    super();
     this.relayUrl = relayUrl || null;
     this.controlPlanePublicKey = controlPlanePublicKey;
     this.allowUnsignedTasks = allowUnsignedTasks;
@@ -56,6 +58,7 @@ export class RelayClient {
 
     socket.addEventListener("open", () => {
       this.reconnectAttempt = 0;
+      this.emit("connected");
       const payload = nodeHello({
         state,
         relaySessionToken: state.relaySessionToken,
@@ -75,8 +78,8 @@ export class RelayClient {
       }
     });
 
-    socket.addEventListener("close", () => this.scheduleReconnect());
-    socket.addEventListener("error", () => this.scheduleReconnect());
+    socket.addEventListener("close", () => { this.emit("disconnected"); this.scheduleReconnect(); });
+    socket.addEventListener("error", () => { this.emit("disconnected"); this.scheduleReconnect(); });
 
     return socket;
   }
