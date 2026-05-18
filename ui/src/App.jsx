@@ -432,6 +432,7 @@ function ModelsTab({ sysInfo, error }) {
       if (!reader) throw new Error('No response stream')
       const decoder = new TextDecoder()
       let buf = ''
+      let lastStatus = null
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
@@ -448,10 +449,11 @@ function ModelsTab({ sysInfo, error }) {
                 setInstallMsg({ type: 'ok', text: `✓ ${m} installed` })
                 setInstallModel('')
               } else {
-                setInstallMsg({ type: 'err', text: 'Install failed' })
+                setInstallMsg({ type: 'err', text: lastStatus || 'Install failed' })
               }
               setInstalling(false)
             } else if (evt.status) {
+              lastStatus = evt.status
               setInstallMsg({ type: 'ok', text: evt.status })
             }
           } catch { /* ignore parse errors */ }
