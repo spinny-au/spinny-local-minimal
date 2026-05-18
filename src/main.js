@@ -68,9 +68,7 @@ try {
     });
 
     if (!state.paired) {
-      if (!state.pairingCode) {
-        state = saveState({ ...state, pairingCode: generatePairingCode() });
-      }
+      state = saveState({ ...state, pairingCode: generatePairingCode() });
       const code = state.pairingCode;
       const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
       const pairingUrl = `${controlUrl}/?localcode=${code}`;

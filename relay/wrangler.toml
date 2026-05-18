@@ -3,9 +3,6 @@ main = "worker.js"
 compatibility_date = "2026-05-18"
 workers_dev = true
 
-routes = [
-  { pattern = "relay.spinny.au/*", custom_domain = true }
-]
 
 [[durable_objects.bindings]]
 name = "NODE_RELAY"
@@ -13,4 +10,4 @@ class_name = "NodeRelay"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["NodeRelay"]
+new_sqlite_classes = ["NodeRelay"]
