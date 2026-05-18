@@ -177,7 +177,9 @@ export class RelayClient extends EventEmitter {
     socket.addEventListener("message", async (event) => {
       try {
         const envelope = JSON.parse(event.data);
-        logRelay(`received message type=${envelope?.payload?.type || envelope?.type || "unknown"}`);
+        const msgType = envelope?.payload?.type || envelope?.type || "unknown";
+        logRelay(`received message type=${msgType}`);
+        if (typeof msgType === "string" && msgType.startsWith("relay.")) return;
         const task = this.verifyEnvelope(envelope, state.nodeId);
         await handleTask(task, { send: (message) => this.sendSigned(message, identity.privateKey) });
       } catch (error) {

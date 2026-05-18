@@ -43,6 +43,8 @@ export class NodeRelay {
 
   attachNode(socket) {
     let nodeId = null;
+    let verified = false;
+    const pending = [];
 
     socket.addEventListener("message", (event) => {
       let envelope;
@@ -61,13 +63,24 @@ export class NodeRelay {
             socket.close(1008, "unauthorized");
             return;
           }
+          verified = true;
           this.nodes.set(nodeId, socket);
           this.broadcastControl({ type: "relay.presence", nodeId, status: "online" });
+          for (const e of pending) {
+            if (e.payload?.type === "node.health") this.recordNodeHealth(nodeId, e.payload).catch(() => {});
+            this.broadcastControl({ type: "node.message", nodeId, envelope: e });
+          }
+          pending.length = 0;
         });
         return;
       }
 
-      if (!nodeId || this.nodes.get(nodeId) !== socket) {
+      if (!verified) {
+        pending.push(envelope);
+        return;
+      }
+
+      if (this.nodes.get(nodeId) !== socket) {
         socket.send(JSON.stringify({ payload: { type: "relay.error", message: "node not authenticated" } }));
         return;
       }
