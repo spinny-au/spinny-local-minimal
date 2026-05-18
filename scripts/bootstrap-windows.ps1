@@ -14,6 +14,10 @@ param(
   [switch]$update
 )
 
+# Accept bash-style --fresh / --update as well as PowerShell-style -fresh / -update
+if ($args -contains '--fresh')  { $fresh  = $true }
+if ($args -contains '--update') { $update = $true }
+
 $ErrorActionPreference = "Stop"
 
 $InstallDir = "$env:LOCALAPPDATA\SpinnyLocalMinimal"
