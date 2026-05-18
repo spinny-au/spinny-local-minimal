@@ -5,6 +5,38 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spinnyHome } from './paths.js'
 
+let lastCpuSample = null
+
+function readCpuSample() {
+  const cpus = os.cpus()
+  const totals = cpus.reduce((acc, cpu) => {
+    const times = cpu.times
+    acc.idle += times.idle
+    acc.total += times.user + times.nice + times.sys + times.idle + times.irq
+    return acc
+  }, { idle: 0, total: 0 })
+  return { cpus, ...totals }
+}
+
+function getCpuInfo() {
+  const sample = readCpuSample()
+  let usagePercent = null
+  if (lastCpuSample) {
+    const idleDelta = sample.idle - lastCpuSample.idle
+    const totalDelta = sample.total - lastCpuSample.total
+    if (totalDelta > 0) {
+      usagePercent = Math.max(0, Math.min(100, Math.round((1 - idleDelta / totalDelta) * 1000) / 10))
+    }
+  }
+  lastCpuSample = sample
+  return {
+    model: sample.cpus[0]?.model || 'Unknown CPU',
+    cores: sample.cpus.length,
+    usagePercent,
+    loadavg: os.loadavg(),
+  }
+}
+
 export function getSystemInfo() {
   const totalMem = os.totalmem()
   const freeMem = os.freemem()
@@ -51,6 +83,7 @@ export function getSystemInfo() {
     platform: os.platform(),
     release: os.release(),
     arch: os.arch(),
+    cpu: getCpuInfo(),
     ram: { total: totalMem, free: freeMem, used: totalMem - freeMem },
     disk,
     gpu,

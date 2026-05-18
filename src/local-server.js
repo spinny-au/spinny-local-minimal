@@ -58,7 +58,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     // Health (used by spinny.au browser fetch)
     if (url.pathname === '/health') {
       const state = loadState()
-      return json(res, { ok: true, nodeId: state.nodeId, paired: state.paired })
+      return json(res, { ok: true, nodeId: state.nodeId, paired: state.paired, health: getSystemInfo() })
     }
 
     // API status

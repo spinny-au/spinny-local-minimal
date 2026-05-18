@@ -71,6 +71,9 @@ export class NodeRelay {
         return;
       }
 
+      if (envelope.payload?.type === "node.health") {
+        this.recordNodeHealth(nodeId, envelope.payload).catch(() => {});
+      }
       this.broadcastControl({ type: "node.message", nodeId, envelope });
     });
 
@@ -93,6 +96,20 @@ export class NodeRelay {
       body: JSON.stringify(envelope)
     });
     return response.ok;
+  }
+
+  async recordNodeHealth(nodeId, payload) {
+    const env = this.state.env;
+    if (!env.SPINNY_CONTROL_URL) return;
+    const headers = { "content-type": "application/json" };
+    if (env.RELAY_SHARED_SECRET) {
+      headers.authorization = `Bearer ${env.RELAY_SHARED_SECRET}`;
+    }
+    await fetch(`${env.SPINNY_CONTROL_URL.replace(/\/$/, "")}/api/local-nodes/${encodeURIComponent(nodeId)}/health`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ health: payload.health || null })
+    });
   }
 
   attachControl(socket) {

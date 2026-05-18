@@ -3,6 +3,7 @@ import { ensureNodeIdentity, signJson, verifyJson } from "./identity.js";
 import { loadState, saveState } from "./state.js";
 import { handleTask } from "./tasks.js";
 import { assertFreshIssuedAt, nodeHello } from "./protocol.js";
+import { getSystemInfo } from "./system-info.js";
 
 function derivedRelayUrl(state) {
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
@@ -42,6 +43,37 @@ function skipInternalRelayUrl(url, target = 'control plane') {
   return true
 }
 
+function isLegacyVpsRelayUrl(url) {
+  try {
+    const parsed = new URL(url)
+    return parsed.pathname === '/api/local-nodes/relay/node'
+  } catch {
+    return false
+  }
+}
+
+function skipLegacyVpsRelayUrl(url, target = 'Cloudflare relay') {
+  if (!url || !isLegacyVpsRelayUrl(url)) return false
+  logRelay(`skipping legacy VPS relay URL ${url} - falling back to ${target}`)
+  return true
+}
+
+function healthMessage() {
+  try {
+    return {
+      type: "node.health",
+      issuedAt: new Date().toISOString(),
+      health: getSystemInfo()
+    }
+  } catch (error) {
+    return {
+      type: "node.health",
+      issuedAt: new Date().toISOString(),
+      health: { error: error.message || "Failed to collect system health" }
+    }
+  }
+}
+
 async function fetchRelayUrl(state) {
   // Ask the control plane — works for nodes paired before relayUrl was stored
   const ctrl = state?.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au'
@@ -50,7 +82,11 @@ async function fetchRelayUrl(state) {
     const res = await fetch(`${base}/api/spinny/local-nodes/relay-url`)
     if (res.ok) {
       const data = await res.json()
-      if (data?.relayUrl && !skipInternalRelayUrl(data.relayUrl, 'derived control-plane URL')) return data.relayUrl
+      if (
+        data?.relayUrl
+        && !skipInternalRelayUrl(data.relayUrl, 'derived control-plane URL')
+        && !skipLegacyVpsRelayUrl(data.relayUrl, 'derived Cloudflare relay')
+      ) return data.relayUrl
     }
   } catch {}
   return null
@@ -58,9 +94,17 @@ async function fetchRelayUrl(state) {
 
 async function resolveRelayUrl(state, explicitRelayUrl) {
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
-  if (explicitRelayUrl && !skipInternalRelayUrl(explicitRelayUrl, 'control plane')) return explicitRelayUrl
-  if (state?.relayUrl && !skipInternalRelayUrl(state.relayUrl, 'control plane')) return state.relayUrl
-  if (state?.relayUrl && isInternalHostname(state.relayUrl)) {
+  if (
+    explicitRelayUrl
+    && !skipInternalRelayUrl(explicitRelayUrl, 'control plane')
+    && !skipLegacyVpsRelayUrl(explicitRelayUrl, 'control plane')
+  ) return explicitRelayUrl
+  if (
+    state?.relayUrl
+    && !skipInternalRelayUrl(state.relayUrl, 'control plane')
+    && !skipLegacyVpsRelayUrl(state.relayUrl, 'control plane')
+  ) return state.relayUrl
+  if (state?.relayUrl && (isInternalHostname(state.relayUrl) || isLegacyVpsRelayUrl(state.relayUrl))) {
     saveState({ ...state, relayUrl: null })
   }
   return await fetchRelayUrl(state) || derivedRelayUrl(state)
@@ -113,6 +157,7 @@ export class RelayClient extends EventEmitter {
       });
       socket.send(JSON.stringify({ payload, signature: signJson(identity.privateKey, payload) }));
       this.startHeartbeat();
+      this.send(healthMessage());
     });
 
     socket.addEventListener("message", async (event) => {
@@ -182,7 +227,7 @@ export class RelayClient extends EventEmitter {
   startHeartbeat() {
     clearInterval(this.heartbeat);
     this.heartbeat = setInterval(() => {
-      this.send({ type: "node.ping", issuedAt: new Date().toISOString() });
+      this.send(healthMessage());
     }, 25_000);
   }
 
