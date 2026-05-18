@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { loadState } from './state.js'
 import { pairNodeDirect } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
+import { getLines } from './log-buffer.js'
 
 const PORT = 47821
 const UI_DIST = join(import.meta.dirname, '..', 'ui', 'dist')
@@ -76,6 +77,12 @@ export function startLocalServer({ getRelayStatus, onPaired } = {}) {
     // API system info
     if (url.pathname === '/api/system' && req.method === 'GET') {
       return json(res, getSystemInfo())
+    }
+
+    // API logs
+    if (url.pathname === '/api/logs' && req.method === 'GET') {
+      const n = parseInt(url.searchParams.get('n') || '200', 10)
+      return json(res, { lines: getLines(n) })
     }
 
     // Install model

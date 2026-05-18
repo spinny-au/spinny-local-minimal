@@ -507,6 +507,57 @@ function SystemTab({ sysInfo, error }) {
   )
 }
 
+function LogsTab() {
+  const [lines, setLines] = useState([])
+  const [error, setError] = useState(null)
+  const bottomRef = React.useRef(null)
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/logs?n=200')
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const d = await r.json()
+      setLines(d.lines || [])
+    } catch (e) {
+      setError(e.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+    const id = setInterval(load, 2000)
+    return () => clearInterval(id)
+  }, [load])
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [lines])
+
+  const levelColor = { log: 'var(--text)', warn: 'var(--warn)', error: 'var(--err)' }
+
+  return (
+    <div className="card" style={{ padding: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--bg-border)' }}>
+        <span className="card-title" style={{ margin: 0 }}>Console</span>
+        <button className="btn secondary" style={{ fontSize: 11, padding: '3px 10px' }} onClick={load}>Refresh</button>
+      </div>
+      {error && <div className="msg err" style={{ margin: 12 }}>{error}</div>}
+      <div style={{ fontFamily: 'monospace', fontSize: 12, lineHeight: 1.6, overflowY: 'auto', maxHeight: '60vh', padding: '8px 0', background: 'var(--bg)' }}>
+        {lines.length === 0 && <div style={{ color: 'var(--text-muted)', padding: '16px' }}>No logs yet.</div>}
+        {lines.map((l, i) => (
+          <div key={i} style={{ display: 'flex', gap: 12, padding: '1px 16px', borderBottom: '1px solid transparent' }}>
+            <span style={{ color: 'var(--text-muted)', flexShrink: 0, fontSize: 11 }}>
+              {new Date(l.t).toLocaleTimeString()}
+            </span>
+            <span style={{ color: levelColor[l.level] || 'var(--text)', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>{l.text}</span>
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  )
+}
+
 function AboutTab({ sysInfo }) {
   const version = sysInfo?.version || '0.1.0'
   return (
@@ -531,7 +582,7 @@ function AboutTab({ sysInfo }) {
   )
 }
 
-const TABS = ['Status', 'Models', 'System', 'About']
+const TABS = ['Status', 'Models', 'System', 'Logs', 'About']
 
 export function App() {
   const [tab, setTab] = useState('Status')
@@ -563,6 +614,7 @@ export function App() {
           {tab === 'Status' && <StatusTab status={status} sysInfo={sysInfo} error={statusErr} />}
           {tab === 'Models' && <ModelsTab sysInfo={sysInfo} error={sysErr} />}
           {tab === 'System' && <SystemTab sysInfo={sysInfo} error={sysErr} />}
+          {tab === 'Logs'  && <LogsTab />}
           {tab === 'About' && <AboutTab sysInfo={sysInfo} />}
         </div>
       </div>

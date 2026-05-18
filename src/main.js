@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { interceptConsole } from "./log-buffer.js";
+interceptConsole();
 import { execSync } from 'node:child_process'
 import qrcode from 'qrcode-terminal'
 import { ensureNodeIdentity } from "./identity.js";
