@@ -94,23 +94,45 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       return json(res, { ok: true })
     }
 
-    // Install model
+    // Install model — streams SSE progress
     if (url.pathname === '/api/models/install' && req.method === 'POST') {
       let body = ''
       req.on('data', d => { body += d })
       req.on('end', () => {
+        let model
         try {
-          const { model } = JSON.parse(body)
-          if (!model) return json(res, { error: 'model required' }, 400)
-          // Sanitize model name — only allow alphanumeric, colons, dots, hyphens, slashes
-          if (!/^[\w.:/\-]+$/.test(model)) return json(res, { error: 'Invalid model name' }, 400)
-          // Run ollama pull in background
-          const proc = spawn('ollama', ['pull', model], { detached: true, stdio: 'ignore' })
-          proc.unref()
-          json(res, { ok: true, message: `Installing ${model}...` })
+          ;({ model } = JSON.parse(body))
         } catch {
-          json(res, { error: 'Invalid request' }, 400)
+          return json(res, { error: 'Invalid request' }, 400)
         }
+        if (!model) return json(res, { error: 'model required' }, 400)
+        if (!/^[\w.:/\-]+$/.test(model)) return json(res, { error: 'Invalid model name' }, 400)
+
+        cors(res)
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'X-Accel-Buffering': 'no',
+        })
+
+        const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`)
+        send({ status: `Starting download: ${model}` })
+
+        const proc = spawn('ollama', ['pull', model], { stdio: ['ignore', 'pipe', 'pipe'] })
+
+        const onData = (chunk) => {
+          const lines = chunk.toString().split('\n').filter(l => l.trim())
+          for (const line of lines) send({ status: line })
+        }
+        proc.stdout.on('data', onData)
+        proc.stderr.on('data', onData)
+
+        proc.on('close', (code) => {
+          send({ done: true, success: code === 0, model })
+          res.end()
+        })
+
+        req.on('close', () => proc.kill())
       })
       return
     }
