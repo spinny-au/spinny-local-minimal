@@ -160,7 +160,7 @@ if ($fresh) {
   Write-Warn "Stopping any running Spinny process..."
   Stop-SpinnyProcess
   # Kill any remaining node processes that may hold file handles
-  & taskkill /F /IM node.exe /T 2>$null
+  try { & cmd /c "taskkill /F /IM node.exe /T >nul 2>&1" } catch {}
   Start-Sleep -Seconds 2
   Set-Location $env:USERPROFILE
   if (Test-Path $InstallDir) {
