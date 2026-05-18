@@ -25,13 +25,26 @@ function New-IconFromBase64([string]$Path) {
   }
   $bytes  = [Convert]::FromBase64String($raw)
   $stream = New-Object System.IO.MemoryStream(,$bytes)
-  $bitmap = New-Object System.Drawing.Bitmap($stream)
-  # Scale to 16x16 — Windows tray clips larger bitmaps instead of scaling
-  $size   = [System.Windows.Forms.SystemInformation]::SmallIconSize
-  $scaled = New-Object System.Drawing.Bitmap($bitmap, $size)
-  $hicon  = $scaled.GetHicon()
+  $src    = New-Object System.Drawing.Bitmap($stream)
+
+  # Scale to the DPI-aware tray icon size with high-quality interpolation
+  $side   = [System.Windows.Forms.SystemInformation]::SmallIconSize.Width
+  $canvas = New-Object System.Drawing.Bitmap($side, $side, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $g      = [System.Drawing.Graphics]::FromImage($canvas)
+  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $g.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+  $g.DrawImage($src, 0, 0, $side, $side)
+  $g.Dispose()
+
+  # Pin to script scope — if the Bitmap is GC'd the HICON becomes dangling
+  $script:_TrayIconBitmap = $canvas
+  $hicon  = $canvas.GetHicon()
   return [System.Drawing.Icon]::FromHandle($hicon)
 }
+
+# Keep a script-level reference so the GC never collects the Bitmap whose
+# pixel data backs the HICON — a collected Bitmap corrupts the tray icon.
+$script:_TrayIconBitmap = $null
 
 $notify = New-Object System.Windows.Forms.NotifyIcon
 $notify.Icon = New-IconFromBase64 $IconBase64File

@@ -9,6 +9,8 @@ const DEFAULT_STATE = {
   pairingCode: null,
   relaySessionToken: null,
   relaySessionExpiresAt: null,
+  relayUrl: null,
+  controlUrl: null,
   nodePublicKey: null,
   createdAt: null,
   updatedAt: null

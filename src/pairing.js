@@ -33,6 +33,7 @@ export async function pairNodeDirect({ accountEmail, controlUrl = process.env.SP
     nodePublicKey: identity.publicKeyDer,
     controlPlanePublicKey: result.controlPlanePublicKey || null,
     relayUrl: result.relayUrl || null,
+    controlUrl: controlUrl || null,
   });
 }
 
@@ -68,5 +69,6 @@ export async function pairNode({ token, controlUrl = process.env.SPINNY_CONTROL_
     nodePublicKey: identity.publicKeyDer,
     controlPlanePublicKey: result.controlPlanePublicKey || null,
     relayUrl: result.relayUrl || null,
+    controlUrl: controlUrl || null,
   });
 }

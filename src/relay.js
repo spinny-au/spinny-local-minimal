@@ -3,9 +3,21 @@ import { loadState } from "./state.js";
 import { handleTask } from "./tasks.js";
 import { assertFreshIssuedAt, nodeHello } from "./protocol.js";
 
+function defaultRelayUrl(state) {
+  if (state?.relayUrl) return state.relayUrl
+  if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
+  // Derive from the control URL used during pairing (stored in state)
+  const ctrl = state?.controlUrl || process.env.SPINNY_CONTROL_URL || ''
+  if (ctrl) {
+    const ws = ctrl.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/$/, '')
+    return `${ws}/api/local-nodes/relay/node`
+  }
+  return 'wss://relay.spinny.au/node'
+}
+
 export class RelayClient {
   constructor({
-    relayUrl = process.env.SPINNY_RELAY_URL || "wss://relay.spinny.au/node",
+    relayUrl,
     controlPlanePublicKey = process.env.SPINNY_CONTROL_PLANE_PUBLIC_KEY,
     allowUnsignedTasks = process.env.SPINNY_ALLOW_UNSIGNED_TASKS === "1",
     reconnect = true
@@ -24,7 +36,8 @@ export class RelayClient {
     const state = loadState();
     if (!state.paired) throw new Error("Pair node before connecting to relay");
     const identity = ensureNodeIdentity();
-    const socket = new WebSocket(this.relayUrl);
+    const url = this.relayUrl || defaultRelayUrl(state);
+    const socket = new WebSocket(url);
     this.socket = socket;
 
     socket.addEventListener("open", () => {
