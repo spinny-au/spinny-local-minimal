@@ -61,7 +61,7 @@ export async function startTray({ getStatus } = {}) {
         items: buildMenu(state, status.relayConnected ?? false),
       },
       debug: false,
-      copyDir: true,
+      copyDir: false,
     })
   } catch (err) {
     console.log(`System tray failed to start: ${err.message} â€” continuing without tray`)
