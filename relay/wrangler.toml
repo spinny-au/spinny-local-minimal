@@ -1,6 +1,11 @@
 name = "spinny-local-relay"
 main = "worker.js"
 compatibility_date = "2026-05-18"
+workers_dev = true
+
+routes = [
+  { pattern = "relay.spinny.au/*", custom_domain = true }
+]
 
 [[durable_objects.bindings]]
 name = "NODE_RELAY"

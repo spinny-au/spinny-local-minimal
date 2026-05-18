@@ -10,6 +10,20 @@ function derivedRelayUrl(state) {
   return 'wss://relay.spinny.au/node'
 }
 
+function relayUrlForState(url, state) {
+  if (!url || !state?.accountId) return url
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname !== 'relay.spinny.au') return url
+    if (!parsed.searchParams.get('accountId')) {
+      parsed.searchParams.set('accountId', state.accountId)
+    }
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
 function logRelay(message, detail = null) {
   if (detail == null) console.log(`[relay] ${message}`)
   else console.log(`[relay] ${message}`, detail)
@@ -93,21 +107,21 @@ async function fetchRelayUrl(state) {
 }
 
 async function resolveRelayUrl(state, explicitRelayUrl) {
-  if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
+  if (process.env.SPINNY_RELAY_URL) return relayUrlForState(process.env.SPINNY_RELAY_URL, state)
   if (
     explicitRelayUrl
     && !skipInternalRelayUrl(explicitRelayUrl, 'control plane')
     && !skipLegacyVpsRelayUrl(explicitRelayUrl, 'control plane')
-  ) return explicitRelayUrl
+  ) return relayUrlForState(explicitRelayUrl, state)
   if (
     state?.relayUrl
     && !skipInternalRelayUrl(state.relayUrl, 'control plane')
     && !skipLegacyVpsRelayUrl(state.relayUrl, 'control plane')
-  ) return state.relayUrl
+  ) return relayUrlForState(state.relayUrl, state)
   if (state?.relayUrl && (isInternalHostname(state.relayUrl) || isLegacyVpsRelayUrl(state.relayUrl))) {
     saveState({ ...state, relayUrl: null })
   }
-  return await fetchRelayUrl(state) || derivedRelayUrl(state)
+  return relayUrlForState(await fetchRelayUrl(state) || derivedRelayUrl(state), state)
 }
 
 export class RelayClient extends EventEmitter {
