@@ -49,7 +49,7 @@ function serveStatic(res, filePath) {
   res.end(readFileSync(filePath))
 }
 
-export function startLocalServer({ getRelayStatus, onPaired, getRelay } = {}) {
+export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getRelay } = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`)
 
@@ -69,6 +69,7 @@ export function startLocalServer({ getRelayStatus, onPaired, getRelay } = {}) {
         nodeId: state.nodeId,
         accountId: state.accountId,
         relayConnected: getRelayStatus?.() ?? false,
+        relayError: getRelayError?.() ?? null,
         version: getSystemInfo().version,
         pairingCode: state.pairingCode || null,
       })

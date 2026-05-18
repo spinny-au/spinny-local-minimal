@@ -379,11 +379,18 @@ function StatusTab({ status, sysInfo, error }) {
         </div>
         <div className="row">
           <span className="row-label">Relay</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span className={`badge ${status.relayConnected ? 'ok' : 'err'}`}>
-              {status.relayConnected ? '● Connected' : '○ Disconnected'}
-            </span>
-            {!status.relayConnected && <ReconnectButton />}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className={`badge ${status.relayConnected ? 'ok' : 'err'}`}>
+                {status.relayConnected ? '● Connected' : '○ Disconnected'}
+              </span>
+              {!status.relayConnected && <ReconnectButton />}
+            </div>
+            {status.relayError && (
+              <div style={{ color: 'var(--err)', fontSize: 11, maxWidth: 360, textAlign: 'right', lineHeight: 1.4 }}>
+                {status.relayError}
+              </div>
+            )}
           </div>
         </div>
         <div className="row">

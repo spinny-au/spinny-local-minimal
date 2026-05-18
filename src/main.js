@@ -48,6 +48,7 @@ try {
 
     let relayConnected = false;
     let relayInstance = null;
+    let relayError = null;
 
     // Suppress unhandled rejections from systray2's internal async init —
     // the tray is optional and must never crash the main process.
@@ -57,6 +58,7 @@ try {
     let pairingResolver = null;
     startLocalServer({
       getRelayStatus: () => relayConnected,
+      getRelayError: () => relayError,
       getRelay: () => relayInstance,
       onPaired: (result) => {
         console.log(`\nPaired! Node ID: ${result.nodeId}`);
@@ -110,8 +112,8 @@ try {
       ...(currentState.controlPlanePublicKey ? { controlPlanePublicKey: currentState.controlPlanePublicKey } : {}),
     });
 
-    relay.on?.('connected', () => { relayConnected = true });
-    relay.on?.('disconnected', () => { relayConnected = false });
+    relay.on?.('connected', () => { relayConnected = true; relayError = null });
+    relay.on?.('disconnected', () => { relayConnected = false; relayError = relay.lastError || 'Relay disconnected' });
 
     relay.connect().catch(() => {});
 
