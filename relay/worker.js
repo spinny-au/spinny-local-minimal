@@ -14,8 +14,9 @@ export default {
 };
 
 export class NodeRelay {
-  constructor(state) {
+  constructor(state, env) {
     this.state = state;
+    this.env = env;
     this.nodes = new Map();
     this.controlSockets = new Set();
   }
@@ -26,7 +27,7 @@ export class NodeRelay {
     }
 
     const url = new URL(request.url);
-    if (url.pathname === "/control" && !isControlAuthorized(request, this.state.env)) {
+    if (url.pathname === "/control" && !isControlAuthorized(request, this.env)) {
       return new Response("unauthorized", { status: 401 });
     }
 
@@ -85,7 +86,7 @@ export class NodeRelay {
   }
 
   async verifyNodeHello(envelope) {
-    const env = this.state.env;
+    const env = this.env;
     if (!env.SPINNY_CONTROL_URL || !env.RELAY_SHARED_SECRET) return true;
     const response = await fetch(`${env.SPINNY_CONTROL_URL.replace(/\/$/, "")}/api/local-nodes/relay-session/verify`, {
       method: "POST",
@@ -99,7 +100,7 @@ export class NodeRelay {
   }
 
   async recordNodeHealth(nodeId, payload) {
-    const env = this.state.env;
+    const env = this.env;
     if (!env.SPINNY_CONTROL_URL) return;
     const headers = { "content-type": "application/json" };
     if (env.RELAY_SHARED_SECRET) {

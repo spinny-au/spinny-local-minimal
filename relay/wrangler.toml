@@ -13,4 +13,4 @@ class_name = "NodeRelay"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["NodeRelay"]
+new_classes = ["NodeRelay"]
