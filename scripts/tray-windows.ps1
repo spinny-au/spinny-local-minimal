@@ -20,7 +20,8 @@ function Read-TextFile([string]$Path, [string]$Fallback) {
 
 # Load icon directly from .ico file — avoids all GC / HICON lifetime issues
 $notify = New-Object System.Windows.Forms.NotifyIcon
-$notify.Icon = New-Object System.Drawing.Icon($IconFile)
+$size = [System.Windows.Forms.SystemInformation]::SmallIconSize
+$notify.Icon = New-Object System.Drawing.Icon($IconFile, $size.Width, $size.Height)
 $notify.Text = "Spinny Local"
 $notify.Visible = $true
 

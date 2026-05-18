@@ -49,7 +49,7 @@ export class RelayClient {
     const state = loadState();
     if (!state.paired) throw new Error("Pair node before connecting to relay");
     const identity = ensureNodeIdentity();
-    const url = this.relayUrl || derivedRelayUrl(state) || await fetchRelayUrl(state);
+    const url = this.relayUrl || state.relayUrl || process.env.SPINNY_RELAY_URL || await fetchRelayUrl(state) || derivedRelayUrl(state);
     this.relayUrl = url; // cache for reconnects
     const socket = new WebSocket(url);
     this.socket = socket;
