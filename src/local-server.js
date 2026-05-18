@@ -48,7 +48,7 @@ function serveStatic(res, filePath) {
   res.end(readFileSync(filePath))
 }
 
-export function startLocalServer({ getRelayStatus } = {}) {
+export function startLocalServer({ getRelayStatus, onPaired } = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`)
 
@@ -126,6 +126,7 @@ export function startLocalServer({ getRelayStatus } = {}) {
         const result = await pairNodeDirect({ accountEmail: email })
         res.writeHead(200, corsHeaders)
         res.end(JSON.stringify({ ok: true, nodeId: result.nodeId }))
+        onPaired?.(result)
       } catch (err) {
         res.writeHead(500, corsHeaders)
         res.end(JSON.stringify({ error: err.message }))
