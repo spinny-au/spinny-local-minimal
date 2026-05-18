@@ -72,6 +72,17 @@ function skipLegacyVpsRelayUrl(url, target = 'Cloudflare relay') {
   return true
 }
 
+async function pushHealthDirect() {
+  const state = loadState()
+  if (!state.paired || !state.nodeId) return
+  const base = (state.controlUrl || 'https://spinny.au').replace(/\/$/, '')
+  await fetch(`${base}/api/spinny/local-nodes/${encodeURIComponent(state.nodeId)}/health`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ health: getSystemInfo() }),
+  })
+}
+
 function healthMessage() {
   try {
     return {
@@ -172,6 +183,7 @@ export class RelayClient extends EventEmitter {
       socket.send(JSON.stringify({ payload, signature: signJson(identity.privateKey, payload) }));
       this.startHeartbeat();
       this.send(healthMessage());
+      pushHealthDirect().catch(() => {});
     });
 
     socket.addEventListener("message", async (event) => {
@@ -244,6 +256,7 @@ export class RelayClient extends EventEmitter {
     clearInterval(this.heartbeat);
     this.heartbeat = setInterval(() => {
       this.send(healthMessage());
+      pushHealthDirect().catch(() => {});
     }, 25_000);
   }
 
