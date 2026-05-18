@@ -299,6 +299,31 @@ function BarRow({ label, used, total }) {
   )
 }
 
+function ReconnectButton() {
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg]   = useState(null)
+  const go = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      await fetch('/api/relay/reconnect', { method: 'POST' })
+      setMsg('Reconnecting…')
+    } catch (e) {
+      setMsg('Failed: ' + e.message)
+    } finally {
+      setBusy(false)
+      setTimeout(() => setMsg(null), 3000)
+    }
+  }
+  return (
+    <span>
+      <button className="btn secondary" style={{ fontSize: 11, padding: '3px 10px' }} onClick={go} disabled={busy}>
+        {busy ? '…' : 'Reconnect'}
+      </button>
+      {msg && <span style={{ fontSize: 11, marginLeft: 6, color: 'var(--text-muted)' }}>{msg}</span>}
+    </span>
+  )
+}
+
 function PairingTokenCard({ code }) {
   const [visible, setVisible] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -354,9 +379,12 @@ function StatusTab({ status, sysInfo, error }) {
         </div>
         <div className="row">
           <span className="row-label">Relay</span>
-          <span className={`badge ${status.relayConnected ? 'ok' : 'err'}`}>
-            {status.relayConnected ? '● Connected' : '○ Disconnected'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className={`badge ${status.relayConnected ? 'ok' : 'err'}`}>
+              {status.relayConnected ? '● Connected' : '○ Disconnected'}
+            </span>
+            {!status.relayConnected && <ReconnectButton />}
+          </div>
         </div>
         <div className="row">
           <span className="row-label">Spinny version</span>

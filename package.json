@@ -17,7 +17,9 @@
     "status": "node --experimental-sqlite --no-warnings src/main.js status",
     "doctor": "node --experimental-sqlite --no-warnings src/main.js doctor",
     "test": "node --experimental-sqlite test/run.js",
-    "build:ui": "cd ui && npm install && npm run build"
+    "build:ui": "cd ui && npm install && npm run build",
+    "start:bg": "powershell -ExecutionPolicy Bypass -File scripts\\start-background.ps1",
+    "stop": "powershell -ExecutionPolicy Bypass -File scripts\\stop-background.ps1"
   },
   "dependencies": {
     "systray2": "^2.1.4",

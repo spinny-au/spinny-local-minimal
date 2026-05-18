@@ -49,7 +49,7 @@ function serveStatic(res, filePath) {
   res.end(readFileSync(filePath))
 }
 
-export function startLocalServer({ getRelayStatus, onPaired } = {}) {
+export function startLocalServer({ getRelayStatus, onPaired, getRelay } = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`)
 
@@ -83,6 +83,14 @@ export function startLocalServer({ getRelayStatus, onPaired } = {}) {
     if (url.pathname === '/api/logs' && req.method === 'GET') {
       const n = parseInt(url.searchParams.get('n') || '200', 10)
       return json(res, { lines: getLines(n) })
+    }
+
+    // Reconnect relay
+    if (url.pathname === '/api/relay/reconnect' && req.method === 'POST') {
+      const relay = getRelay?.()
+      if (!relay) return json(res, { error: 'Relay not initialised' }, 503)
+      relay.connect().catch(() => {})
+      return json(res, { ok: true })
     }
 
     // Install model

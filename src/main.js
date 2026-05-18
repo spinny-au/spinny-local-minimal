@@ -47,6 +47,7 @@ try {
     let state = loadState();
 
     let relayConnected = false;
+    let relayInstance = null;
 
     // Suppress unhandled rejections from systray2's internal async init —
     // the tray is optional and must never crash the main process.
@@ -56,6 +57,7 @@ try {
     let pairingResolver = null;
     startLocalServer({
       getRelayStatus: () => relayConnected,
+      getRelay: () => relayInstance,
       onPaired: (result) => {
         console.log(`\nPaired! Node ID: ${result.nodeId}`);
         console.log("Starting relay connection...\n");
@@ -103,7 +105,7 @@ try {
 
     // Start relay — use values from state if available (set during pairing)
     const currentState = loadState();
-    const relay = new RelayClient({
+    const relay = relayInstance = new RelayClient({
       ...(currentState.relayUrl ? { relayUrl: currentState.relayUrl } : {}),
       ...(currentState.controlPlanePublicKey ? { controlPlanePublicKey: currentState.controlPlanePublicKey } : {}),
     });
