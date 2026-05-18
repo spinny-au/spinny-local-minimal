@@ -134,6 +134,12 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         proc.on('close', (code) => {
           send({ done: true, success: code === 0, model })
           res.end()
+          if (code === 0) {
+            try {
+              const relay = getRelay?.()
+              if (relay) relay.send({ type: 'node.health', issuedAt: new Date().toISOString(), health: getSystemInfo() })
+            } catch {}
+          }
         })
 
         req.on('close', () => proc.kill())

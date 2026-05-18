@@ -67,7 +67,8 @@ export function getSystemInfo() {
     const lines = out.split('\n').slice(1).filter(Boolean)
     ollamaModels = lines.map(l => {
       const parts = l.trim().split(/\s+/)
-      return { name: parts[0], size: parts[2] || '' }
+      const size = parts[2] ? (parts[3]?.match(/^[A-Za-z]+$/) ? `${parts[2]} ${parts[3]}` : parts[2]) : ''
+      return { name: parts[0], size }
     }).filter(m => m.name && m.name !== 'NAME')
   } catch {}
 
