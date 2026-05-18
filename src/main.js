@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createServer } from "node:http";
 import { ensureNodeIdentity } from "./identity.js";
 import { ensureVaultKey, Vault } from "./vault.js";
 import { pairNode } from "./pairing.js";
@@ -6,6 +7,23 @@ import { startPairingServer } from "./pairing-server.js";
 import { RelayClient } from "./relay.js";
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
+
+const PORT = 47821;
+
+function startStatusServer() {
+  const srv = createServer((req, res) => {
+    const state = loadState();
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(JSON.stringify({ ok: true, nodeId: state.nodeId, paired: state.paired }));
+  });
+  srv.listen(PORT, "127.0.0.1", () => {
+    console.log(`Status server listening on port ${PORT}`);
+  });
+  srv.on("error", () => {}); // silently ignore EADDRINUSE
+}
 
 const command = process.argv[2] || "start";
 
@@ -47,14 +65,17 @@ try {
         state = saveState({ ...state, pairingCode: generatePairingCode() });
       }
       const code = state.pairingCode;
-      console.log("\n┌─────────────────────────────────────┐");
-      console.log(`│  Pairing code:  ${code.padEnd(20)}│`);
-      console.log("│  Enter it on spinny.au → Local Node  │");
-      console.log("└─────────────────────────────────────┘\n");
-
       const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
+      const pairingUrl = `${controlUrl}/?localcode=${code}`;
+
+      console.log("\n┌──────────────────────────────────────────┐");
+      console.log(`│  Pairing code:  ${code.padEnd(25)}│`);
+      console.log("│  Go to spinny.au → Settings → Local Node │");
+      console.log("│  and enter the code above, or scan QR:   │");
+      console.log("└──────────────────────────────────────────┘\n");
+
       const paired = await startPairingServer({
-        pairingPageUrl: `${controlUrl}/pair?node=localhost:${47821}`,
+        pairingPageUrl: pairingUrl,
         onPaired: (s) => {
           console.log(`\nPaired! Node ID: ${s.nodeId}`);
           console.log("Starting relay connection...\n");
@@ -65,6 +86,9 @@ try {
         process.exit(0);
       }
     }
+
+    // Keep a status server running so spinny.au can always detect this node
+    startStatusServer();
 
     // Start relay — use values from state if available (set during pairing)
     const currentState = loadState();
