@@ -86,9 +86,23 @@ Set-Content -LiteralPath $startupPath -Value $cmd -Encoding ASCII
 Write-Ok "Will start automatically on login"
 
 # ── 8. Done — launch ─────────────────────────────────────────────────────────
+$StateFile = "$env:USERPROFILE\.spinny-local\state.json"
+$alreadyPaired = $false
+if (Test-Path $StateFile) {
+  try {
+    $s = Get-Content $StateFile -Raw | ConvertFrom-Json
+    if ($s.paired -eq $true) { $alreadyPaired = $true }
+  } catch {}
+}
+
 Write-Host ""
-Write-Host "  All done! Starting Spinny now..." -ForegroundColor Green
-Write-Host "  Scan the QR code with your phone to pair this machine." -ForegroundColor White
+if ($alreadyPaired) {
+  Write-Host "  All done! This machine is already paired." -ForegroundColor Green
+  Write-Host "  Starting local node..." -ForegroundColor White
+} else {
+  Write-Host "  All done! Starting Spinny now..." -ForegroundColor Green
+  Write-Host "  A pairing code will appear below — enter it on spinny.au." -ForegroundColor White
+}
 Write-Host ""
 
 Set-Location $InstallDir
