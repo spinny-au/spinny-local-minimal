@@ -11,6 +11,8 @@ import { pairNodeDirect } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
 import { getLines } from './log-buffer.js'
 
+const downloads = new Map() // model -> { status, progress, done, success, startedAt }
+
 const PORT = 47821
 const UI_DIST = join(import.meta.dirname, '..', 'ui', 'dist')
 
@@ -98,51 +100,119 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       return json(res, { ok: true })
     }
 
-    // Install model — streams SSE progress
+    // Install model — SSE progress, download continues if tab closes
     if (url.pathname === '/api/models/install' && req.method === 'POST') {
       let body = ''
       req.on('data', d => { body += d })
       req.on('end', () => {
         let model
-        try {
-          ;({ model } = JSON.parse(body))
-        } catch {
-          return json(res, { error: 'Invalid request' }, 400)
-        }
+        try { ;({ model } = JSON.parse(body)) } catch { return json(res, { error: 'Invalid request' }, 400) }
         if (!model) return json(res, { error: 'model required' }, 400)
         if (!/^[\w.:/\-]+$/.test(model)) return json(res, { error: 'Invalid model name' }, 400)
 
         cors(res)
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'X-Accel-Buffering': 'no',
-        })
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
+        let connOpen = true
+        req.on('close', () => { connOpen = false })
+        const safeSend = (data) => {
+          if (!connOpen || res.writableEnded) return
+          try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {}
+        }
 
-        const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`)
-        send({ status: `Starting download: ${model}` })
+        // If already in progress, attach as observer polling the map
+        const existing = downloads.get(model)
+        if (existing && !existing.done) {
+          safeSend({ status: existing.status, progress: existing.progress })
+          const poll = setInterval(() => {
+            const dl = downloads.get(model)
+            if (!dl) { clearInterval(poll); if (!res.writableEnded) res.end(); return }
+            safeSend({ status: dl.status, progress: dl.progress })
+            if (dl.done) { clearInterval(poll); safeSend({ done: true, success: dl.success, model }); if (!res.writableEnded) res.end() }
+          }, 500)
+          req.on('close', () => clearInterval(poll))
+          return
+        }
+
+        downloads.set(model, { status: `Starting download: ${model}`, progress: null, done: false, success: false, startedAt: Date.now() })
+        safeSend({ status: `Starting download: ${model}` })
 
         const proc = spawn('ollama', ['pull', model], { stdio: ['ignore', 'pipe', 'pipe'] })
-
         const onData = (chunk) => {
           const lines = chunk.toString().split('\n').filter(l => l.trim())
-          for (const line of lines) send({ status: line })
+          for (const line of lines) {
+            const pct = line.match(/(\d+)%/)
+            const progress = pct ? parseInt(pct[1]) : (downloads.get(model)?.progress ?? null)
+            downloads.set(model, { ...downloads.get(model), status: line, progress })
+            safeSend({ status: line, progress })
+          }
         }
         proc.stdout.on('data', onData)
         proc.stderr.on('data', onData)
-
         proc.on('close', (code) => {
-          send({ done: true, success: code === 0, model })
-          res.end()
-          if (code === 0) {
+          const success = code === 0
+          downloads.set(model, { ...downloads.get(model), done: true, success, progress: success ? 100 : null })
+          safeSend({ done: true, success, model })
+          if (!res.writableEnded) res.end()
+          if (success) {
             try {
               const relay = getRelay?.()
               if (relay) relay.send({ type: 'node.health', issuedAt: new Date().toISOString(), health: getSystemInfo() })
             } catch {}
           }
+          setTimeout(() => downloads.delete(model), 60_000)
         })
+        // NO proc.kill on close — download continues in background
+      })
+      return
+    }
 
-        req.on('close', () => proc.kill())
+    // Active downloads — UI polls this every 2s to show progress
+    if (url.pathname === '/api/models/downloading' && req.method === 'GET') {
+      const result = {}
+      for (const [k, v] of downloads) result[k] = { status: v.status, progress: v.progress, done: v.done, success: v.success }
+      return json(res, result)
+    }
+
+    // Chat — proxies to local ollama, streams SSE
+    if (url.pathname === '/api/chat' && req.method === 'POST') {
+      let body = ''
+      req.on('data', d => { body += d })
+      req.on('end', async () => {
+        let parsed
+        try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400) }
+        const { model, messages } = parsed
+        if (!model || !Array.isArray(messages)) return json(res, { error: 'model and messages required' }, 400)
+        cors(res)
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
+        const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
+        try {
+          const ollamaRes = await fetch('http://localhost:11434/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, messages, stream: true }),
+          })
+          if (!ollamaRes.ok) { send({ error: `Ollama error ${ollamaRes.status}: is the model installed?` }); return res.end() }
+          const reader = ollamaRes.body.getReader()
+          const dec = new TextDecoder()
+          let buf = ''
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += dec.decode(value, { stream: true })
+            const lines = buf.split('\n')
+            buf = lines.pop() ?? ''
+            for (const line of lines) {
+              if (!line.trim()) continue
+              try {
+                const chunk = JSON.parse(line)
+                send({ content: chunk.message?.content ?? '', done: chunk.done ?? false })
+              } catch {}
+            }
+          }
+        } catch (err) {
+          send({ error: err.message })
+        }
+        res.end()
       })
       return
     }

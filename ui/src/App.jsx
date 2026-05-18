@@ -39,6 +39,20 @@ const css = `
 .tab-btn.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .tab-btn.update-tab { color: var(--ok); font-weight: 600; }
 .tab-btn.update-tab:hover { background: rgba(34,197,94,0.1); color: var(--ok); }
+.msg.info { background: rgba(255,255,255,0.04); color: var(--text-muted); font-family: monospace; font-size: 11px; }
+.dl-progress-wrap { background: var(--bg-border); border-radius: 4px; height: 6px; margin-top: 6px; overflow: hidden; }
+.dl-progress-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.4s ease; }
+.chat-messages { display: flex; flex-direction: column; gap: 10px; max-height: 55vh; overflow-y: auto; padding: 12px 0; }
+.chat-bubble-wrap { display: flex; }
+.chat-bubble-wrap.user { justify-content: flex-end; }
+.chat-bubble-wrap.assistant { justify-content: flex-start; }
+.chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.6; max-width: 85%; white-space: pre-wrap; word-break: break-word; }
+.chat-bubble.user { background: var(--accent); color: #fff; border-radius: 12px 12px 2px 12px; }
+.chat-bubble.assistant { background: var(--bg); border: 1px solid var(--bg-border); border-radius: 2px 12px 12px 12px; }
+.chat-input-row { display: flex; gap: 8px; margin-top: 12px; }
+.chat-textarea { flex: 1; background: var(--bg); border: 1px solid var(--bg-border); border-radius: 6px; color: var(--text); padding: 10px 12px; font-size: 13px; resize: none; outline: none; min-height: 42px; font-family: inherit; }
+.chat-textarea:focus { border-color: var(--accent); }
+.model-select { background: var(--bg); border: 1px solid var(--bg-border); border-radius: 6px; color: var(--text); padding: 6px 10px; font-size: 12px; outline: none; margin-bottom: 12px; }
 
 .content { flex: 1; padding: 24px; max-width: 800px; margin: 0 auto; width: 100%; }
 
@@ -405,19 +419,23 @@ function StatusTab({ status, sysInfo, error }) {
   )
 }
 
-function ModelsTab({ sysInfo, error }) {
+function ModelsTab({ sysInfo, error, downloads }) {
   const [installModel, setInstallModel] = useState('')
   const [installing, setInstalling] = useState(false)
   const [installMsg, setInstallMsg] = useState(null)
+  const [progress, setProgress] = useState(null)
 
   if (error) return <div className="error-banner">Could not connect to local server: {error}</div>
   if (!sysInfo) return <div className="loading">Loading models...</div>
+
+  const activeDownloads = Object.entries(downloads || {}).filter(([, v]) => !v.done)
 
   async function doInstall(model) {
     const m = model || installModel.trim()
     if (!m) return
     setInstalling(true)
-    setInstallMsg({ type: 'ok', text: `Connecting…` })
+    setProgress(null)
+    setInstallMsg({ type: 'info', text: `Connecting…` })
     try {
       const r = await fetch('/api/models/install', {
         method: 'POST',
@@ -446,15 +464,19 @@ function ModelsTab({ sysInfo, error }) {
             const evt = JSON.parse(line)
             if (evt.done) {
               if (evt.success) {
+                setProgress(100)
                 setInstallMsg({ type: 'ok', text: `✓ ${m} installed` })
                 setInstallModel('')
               } else {
+                setProgress(null)
                 setInstallMsg({ type: 'err', text: lastStatus || 'Install failed' })
               }
               setInstalling(false)
             } else if (evt.status) {
               lastStatus = evt.status
-              setInstallMsg({ type: 'ok', text: evt.status })
+              const pct = evt.status.match(/(\d+)%/)
+              if (pct) setProgress(parseInt(pct[1]))
+              setInstallMsg({ type: 'info', text: evt.status })
             }
           } catch { /* ignore parse errors */ }
         }
@@ -467,6 +489,25 @@ function ModelsTab({ sysInfo, error }) {
 
   return (
     <>
+      {activeDownloads.length > 0 && (
+        <div className="card">
+          <div className="card-title">Downloading</div>
+          {activeDownloads.map(([name, dl]) => (
+            <div key={name} style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="model-name">{name}</span>
+                {dl.progress != null && <span style={{ fontSize: 12, color: 'var(--accent)' }}>{dl.progress}%</span>}
+              </div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dl.status}</div>
+              {dl.progress != null && (
+                <div className="dl-progress-wrap">
+                  <div className="dl-progress-fill" style={{ width: `${dl.progress}%` }} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="card">
         <div className="card-title">Installed Models ({sysInfo.models?.length || 0})</div>
         {sysInfo.ollamaRunning ? null : (
@@ -643,6 +684,115 @@ function AboutTab({ sysInfo }) {
   )
 }
 
+function ChatTab({ sysInfo }) {
+  const [model, setModel] = useState('')
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [streaming, setStreaming] = useState(false)
+  const bottomRef = React.useRef(null)
+
+  const models = sysInfo?.models || []
+  const selectedModel = model || models[0]?.name || ''
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  async function send() {
+    const text = input.trim()
+    if (!text || !selectedModel || streaming) return
+    const userMsg = { role: 'user', content: text, id: Date.now() }
+    const assistantId = Date.now() + 1
+    setMessages(prev => [...prev, userMsg, { role: 'assistant', content: '', id: assistantId }])
+    setInput('')
+    setStreaming(true)
+    try {
+      const r = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: selectedModel, messages: [...messages, userMsg].map(m => ({ role: m.role, content: m.content })) }),
+      })
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        throw new Error(d.error || `HTTP ${r.status}`)
+      }
+      const reader = r.body?.getReader()
+      if (!reader) throw new Error('No response stream')
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const parts = buf.split('\n\n')
+        buf = parts.pop() ?? ''
+        for (const part of parts) {
+          const line = part.replace(/^data: /, '').trim()
+          if (!line) continue
+          try {
+            const evt = JSON.parse(line)
+            if (evt.error) throw new Error(evt.error)
+            if (evt.content) {
+              setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: m.content + evt.content } : m))
+            }
+          } catch (parseErr) {
+            if (parseErr.message !== 'Unexpected end of JSON input') throw parseErr
+          }
+        }
+      }
+    } catch (e) {
+      setMessages(prev => prev.map(m => m.id === (messages.length > 0 ? messages[messages.length - 1]?.id + 1 : 1) ? { ...m, content: `Error: ${e.message}` } : m))
+    } finally {
+      setStreaming(false)
+    }
+  }
+
+  if (!sysInfo) return <div className="loading">Loading...</div>
+  if (!models.length) return (
+    <div className="card">
+      <div className="card-title">Chat</div>
+      <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No models installed. Install a model in the Models tab first.</div>
+    </div>
+  )
+
+  return (
+    <div className="card">
+      <div className="card-title">Chat</div>
+      <select className="model-select" value={selectedModel} onChange={e => setModel(e.target.value)}>
+        {models.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
+      </select>
+      <div className="chat-messages">
+        {messages.length === 0 && (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: '24px 0' }}>
+            Start a conversation with {selectedModel}
+          </div>
+        )}
+        {messages.map(m => (
+          <div key={m.id} className={`chat-bubble-wrap ${m.role}`}>
+            <div className={`chat-bubble ${m.role}`}>
+              {m.content || (m.role === 'assistant' && streaming ? '▋' : '')}
+            </div>
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+      <div className="chat-input-row">
+        <textarea
+          className="chat-textarea"
+          placeholder={`Message ${selectedModel}…`}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+          rows={1}
+        />
+        <button className="btn" onClick={send} disabled={streaming || !input.trim()}>
+          {streaming ? '…' : 'Send'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function UpdateTab({ localVersion, remoteVersion }) {
   const [status, setStatus] = useState(null)
   const [updating, setUpdating] = useState(false)
@@ -706,13 +856,14 @@ function UpdateTab({ localVersion, remoteVersion }) {
   )
 }
 
-const TABS = ['Status', 'Models', 'System', 'Logs', 'About']
+const TABS = ['Status', 'Models', 'Chat', 'System', 'Logs', 'About']
 
 export function App() {
   const [tab, setTab] = useState('Status')
   const { data: status, error: statusErr } = usePoll('/api/status', 5000)
   const { data: sysInfo, error: sysErr } = usePoll('/api/system', 5000)
   const { data: updateInfo } = usePoll('/api/update/check', 5 * 60 * 1000)
+  const { data: dlData } = usePoll('/api/models/downloading', 2000)
   const hasUpdate = updateInfo?.updateAvailable
   const tabs = hasUpdate ? [...TABS, 'Update'] : TABS
 
@@ -739,7 +890,8 @@ export function App() {
         </div>
         <div className="content">
           {tab === 'Status' && <StatusTab status={status} sysInfo={sysInfo} error={statusErr} />}
-          {tab === 'Models' && <ModelsTab sysInfo={sysInfo} error={sysErr} />}
+          {tab === 'Models' && <ModelsTab sysInfo={sysInfo} error={sysErr} downloads={dlData || {}} />}
+          {tab === 'Chat'   && <ChatTab sysInfo={sysInfo} />}
           {tab === 'System' && <SystemTab sysInfo={sysInfo} error={sysErr} />}
           {tab === 'Logs'  && <LogsTab />}
           {tab === 'About' && <AboutTab sysInfo={sysInfo} />}
