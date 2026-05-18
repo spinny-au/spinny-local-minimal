@@ -2,6 +2,7 @@ import { OllamaClient } from "./ollama.js";
 import { loadState } from "./state.js";
 import { taskProgress, taskResult } from "./protocol.js";
 import { Vault } from "./vault.js";
+import { importModelBundleFromUrl } from "./model-bundles.js";
 
 export async function handleTask(task, { send, ollama = new OllamaClient() } = {}) {
   const state = loadState();
@@ -23,6 +24,16 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
     }
     await send?.(taskResult({ taskId: task.taskId, status: "complete", result: last || { ok: true, model } }));
     return last || { ok: true, model };
+  }
+
+  if (task.type === "model.transferFrom") {
+    const model = task.params?.model;
+    const sourceUrl = task.params?.sourceUrl;
+    if (!model || !sourceUrl) throw new Error("model.transferFrom missing params.model or params.sourceUrl");
+    await send?.(taskProgress({ taskId: task.taskId, status: "transferring", detail: { model } }));
+    const result = await importModelBundleFromUrl(sourceUrl, model);
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
   }
 
   if (task.type === "llm.generate") {

@@ -11,6 +11,7 @@ import { pairNodeDirect } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
 import { getLines } from './log-buffer.js'
 import { Vault } from './vault.js'
+import { exportModelBundle, importModelBundle, importModelBundleFromUrl, getBundleReadStream } from './model-bundles.js'
 
 const downloads = new Map() // model -> { status, progress, done, success, startedAt }
 
@@ -134,6 +135,53 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       if (!relay) return json(res, { error: 'Relay not initialised' }, 503)
       relay.connect().catch(() => {})
       return json(res, { ok: true })
+    }
+
+    // Export an installed Ollama model as a portable Spinny bundle.
+    if (url.pathname === '/api/models/bundle/export' && req.method === 'GET') {
+      try {
+        const model = url.searchParams.get('model') || ''
+        return json(res, exportModelBundle(model))
+      } catch (error) {
+        return json(res, { error: error.message }, 400)
+      }
+    }
+
+    // Download a portable Spinny model bundle.
+    if (url.pathname === '/api/models/bundle/download' && req.method === 'GET') {
+      try {
+        const model = url.searchParams.get('model') || ''
+        const bundle = getBundleReadStream(model)
+        cors(res)
+        res.writeHead(200, {
+          'Content-Type': 'application/gzip',
+          'Content-Disposition': `attachment; filename="${bundle.fileName}"`,
+          'Content-Length': String(bundle.bytes),
+        })
+        return bundle.stream.pipe(res)
+      } catch (error) {
+        return json(res, { error: error.message }, 400)
+      }
+    }
+
+    // Import a portable Spinny model bundle from a local path or URL.
+    if (url.pathname === '/api/models/bundle/import' && req.method === 'POST') {
+      let body = ''
+      req.on('data', d => { body += d })
+      req.on('end', async () => {
+        try {
+          const parsed = JSON.parse(body)
+          const result = parsed.url
+            ? await importModelBundleFromUrl(parsed.url, parsed.model)
+            : importModelBundle(parsed.path)
+          const relay = getRelay?.()
+          if (relay) relay.send({ type: 'node.health', issuedAt: new Date().toISOString(), health: getSystemInfo() })
+          return json(res, result)
+        } catch (error) {
+          return json(res, { error: error.message }, 400)
+        }
+      })
+      return
     }
 
     // Install model — SSE progress, download continues if tab closes

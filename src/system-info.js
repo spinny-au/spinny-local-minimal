@@ -90,6 +90,12 @@ export function getSystemInfo() {
     gpu,
     ollamaRunning,
     models: ollamaModels,
+    capabilities: {
+      modelInstall: true,
+      modelBundleExport: true,
+      modelBundleImport: true,
+      modelTransferFromUrl: true,
+    },
     version,
   }
 }
