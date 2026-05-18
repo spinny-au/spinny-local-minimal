@@ -159,6 +159,7 @@ Write-Step "Setting up Spinny Local Minimal..."
 if ($fresh) {
   Write-Warn "Stopping any running Spinny process..."
   Stop-SpinnyProcess
+  Set-Location $env:USERPROFILE  # move out of InstallDir before deleting it
   if (Test-Path $InstallDir) {
     Write-Warn "Removing existing install..."
     Remove-Item -Recurse -Force $InstallDir
