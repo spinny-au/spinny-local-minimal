@@ -37,7 +37,12 @@ export async function startTray({ getStatus } = {}) {
       console.log('System tray unavailable (native module not found) â€” continuing without tray')
       return null
     }
-    SysTray = mod.default || mod.SysTray
+    // CJS→ESM interop: systray2 exports { default: Constructor }
+    // so mod.default is the CJS exports object, mod.default.default is the class
+    const raw = mod.default
+    SysTray = typeof raw === 'function' ? raw
+            : typeof raw?.default === 'function' ? raw.default
+            : mod.SysTray
   } catch {
     console.log('System tray unavailable â€” continuing without tray')
     return null
