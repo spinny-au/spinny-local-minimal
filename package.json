@@ -16,9 +16,11 @@
     "pair": "node --experimental-sqlite --no-warnings src/main.js pair",
     "status": "node --experimental-sqlite --no-warnings src/main.js status",
     "doctor": "node --experimental-sqlite --no-warnings src/main.js doctor",
-    "test": "node --experimental-sqlite test/run.js"
+    "test": "node --experimental-sqlite test/run.js",
+    "build:ui": "cd ui && npm install && npm run build"
   },
   "dependencies": {
+    "systray2": "^2.1.4",
     "qrcode-terminal": "^0.12.0"
   },
   "packageManager": "npm@11.7.0+sha512.c22099a6fff8d5b2286c2a09df5352b4858a7c0c716320f58989d60ad8b29ecf2ce6fdfe97ccb41c23ffb1272e1fa079f868487dd6b81d02a2a9e199c095a117"

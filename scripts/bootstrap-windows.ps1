@@ -77,6 +77,14 @@ Set-Location $InstallDir
 npm install --silent 2>$null
 Write-Ok "Dependencies ready"
 
+# ── 6b. Build React UI ───────────────────────────────────────────────────────
+Write-Step "Building local panel UI..."
+Set-Location "$InstallDir\ui"
+npm install --silent 2>$null
+npm run build --silent 2>$null
+Set-Location $InstallDir
+Write-Ok "Local panel ready"
+
 # ── 7. Register startup ──────────────────────────────────────────────────────
 Write-Step "Registering auto-start on login..."
 $startupDir  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
@@ -104,6 +112,13 @@ if ($alreadyPaired) {
   Write-Host "  A pairing code will appear below — enter it on spinny.au." -ForegroundColor White
 }
 Write-Host ""
+
+# Desktop shortcut
+$WshShell = New-Object -comObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\Spinny Local.url")
+$Shortcut.TargetPath = "http://localhost:47821"
+$Shortcut.Save()
+Write-Ok "Desktop shortcut created"
 
 Set-Location $InstallDir
 node --experimental-sqlite --no-warnings src/main.js start

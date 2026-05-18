@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { createServer } from "node:http";
 import { ensureNodeIdentity } from "./identity.js";
 import { ensureVaultKey, Vault } from "./vault.js";
 import { pairNode } from "./pairing.js";
@@ -7,23 +6,8 @@ import { startPairingServer } from "./pairing-server.js";
 import { RelayClient } from "./relay.js";
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
-
-const PORT = 47821;
-
-function startStatusServer() {
-  const srv = createServer((req, res) => {
-    const state = loadState();
-    res.writeHead(200, {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-    });
-    res.end(JSON.stringify({ ok: true, nodeId: state.nodeId, paired: state.paired }));
-  });
-  srv.listen(PORT, "127.0.0.1", () => {
-    console.log(`Status server listening on port ${PORT}`);
-  });
-  srv.on("error", () => {}); // silently ignore EADDRINUSE
-}
+import { startLocalServer } from "./local-server.js";
+import { startTray } from "./tray.js";
 
 const command = process.argv[2] || "start";
 
@@ -57,7 +41,7 @@ try {
   } else if (command === "start") {
     ensureNodeIdentity();
     ensureVaultKey();
-    const state = loadState();
+    let state = loadState();
 
     if (!state.paired) {
       // Generate and persist a pairing code if not already set
@@ -87,8 +71,11 @@ try {
       }
     }
 
-    // Keep a status server running so spinny.au can always detect this node
-    startStatusServer();
+    // Track relay connectivity
+    let relayConnected = false;
+
+    // Start the local panel server
+    startLocalServer({ getRelayStatus: () => relayConnected });
 
     // Start relay — use values from state if available (set during pairing)
     const currentState = loadState();
@@ -96,7 +83,15 @@ try {
       ...(currentState.relayUrl ? { relayUrl: currentState.relayUrl } : {}),
       ...(currentState.controlPlanePublicKey ? { controlPlanePublicKey: currentState.controlPlanePublicKey } : {}),
     });
+
+    relay.on?.('connected', () => { relayConnected = true });
+    relay.on?.('disconnected', () => { relayConnected = false });
+
     relay.connect();
+
+    // Start system tray (optional — wrapped in try/catch inside startTray)
+    startTray({ getStatus: () => ({ relayConnected }) });
+
     console.log("Spinny local node running.");
 
   } else if (command === "doctor") {
