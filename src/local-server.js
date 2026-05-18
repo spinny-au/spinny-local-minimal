@@ -34,6 +34,7 @@ function corsSpinny(res) {
   res.setHeader('Access-Control-Allow-Origin', SPINNY_ORIGIN)
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  res.setHeader('Access-Control-Allow-Private-Network', 'true')
   res.setHeader('Vary', 'Origin')
 }
 
@@ -63,8 +64,8 @@ function cors(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 }
 
-function json(res, data, status = 200) {
-  cors(res)
+function json(res, data, status = 200, corsOverride = null) {
+  if (corsOverride) corsOverride(res); else cors(res)
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(data))
 }
@@ -376,7 +377,6 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
 
     // ── Vault: list stored providers (masked) ─────────────────────────────
     if (url.pathname === '/api/vault/keys' && req.method === 'GET') {
-      corsSpinny(res)
       const vault = new Vault()
       try {
         const items = vault.list(VAULT_NS, 50)
@@ -385,27 +385,26 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
           preview: value?.key ? maskKey(value.key) : '****',
           storedAt: value?.storedAt || null,
         }))
-        return json(res, { keys })
+        return json(res, { keys }, 200, corsSpinny)
       } finally { vault.close() }
     }
 
     // ── Vault: store a key ────────────────────────────────────────────────
     if (url.pathname === '/api/vault/keys' && req.method === 'POST') {
-      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403)
-      corsSpinny(res)
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinny)
       let body = ''
       req.on('data', d => { body += d })
       req.on('end', () => {
         let parsed
-        try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400) }
+        try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400, corsSpinny) }
         const { provider, key } = parsed
-        if (!provider || !key) return json(res, { error: 'provider and key required' }, 400)
-        if (!/^[\w-]+$/.test(provider)) return json(res, { error: 'Invalid provider name' }, 400)
-        if (key.length < 8) return json(res, { error: 'Key too short' }, 400)
+        if (!provider || !key) return json(res, { error: 'provider and key required' }, 400, corsSpinny)
+        if (!/^[\w-]+$/.test(provider)) return json(res, { error: 'Invalid provider name' }, 400, corsSpinny)
+        if (key.length < 8) return json(res, { error: 'Key too short' }, 400, corsSpinny)
         const vault = new Vault()
         try {
           vault.put(VAULT_NS, provider, { key, storedAt: new Date().toISOString() })
-          return json(res, { ok: true, provider, preview: maskKey(key) })
+          return json(res, { ok: true, provider, preview: maskKey(key) }, 200, corsSpinny)
         } finally { vault.close() }
       })
       return
@@ -414,28 +413,26 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     // ── Vault: delete a key ───────────────────────────────────────────────
     const vaultDel = url.pathname.match(/^\/api\/vault\/keys\/([\w-]+)$/)
     if (vaultDel && req.method === 'DELETE') {
-      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403)
-      corsSpinny(res)
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinny)
       const provider = vaultDel[1]
       const vault = new Vault()
       try {
         vault.db.prepare('DELETE FROM encrypted_items WHERE namespace = ? AND item_key = ?').run(VAULT_NS, provider)
-        return json(res, { ok: true, provider })
+        return json(res, { ok: true, provider }, 200, corsSpinny)
       } finally { vault.close() }
     }
 
     // ── Cloud chat: use vault key to call AI provider, stream SSE ─────────
     if (url.pathname === '/api/cloud-chat' && req.method === 'POST') {
-      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403)
-      corsSpinny(res)
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinny)
       let body = ''
       req.on('data', d => { body += d })
       req.on('end', async () => {
         let parsed
-        try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400) }
+        try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400, corsSpinny) }
         const { provider, model, messages } = parsed
-        if (!provider || !model || !Array.isArray(messages)) return json(res, { error: 'provider, model and messages required' }, 400)
-        if (!CLOUD_APIS[provider]) return json(res, { error: `Unknown provider: ${provider}` }, 400)
+        if (!provider || !model || !Array.isArray(messages)) return json(res, { error: 'provider, model and messages required' }, 400, corsSpinny)
+        if (!CLOUD_APIS[provider]) return json(res, { error: `Unknown provider: ${provider}` }, 400, corsSpinny)
 
         const vault = new Vault()
         let apiKey
@@ -443,8 +440,9 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
           const entry = vault.get(VAULT_NS, provider)
           apiKey = entry?.key
         } finally { vault.close() }
-        if (!apiKey) return json(res, { error: `No vault key stored for: ${provider}` }, 401)
+        if (!apiKey) return json(res, { error: `No vault key stored for: ${provider}` }, 401, corsSpinny)
 
+        corsSpinny(res)
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
         const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
 
@@ -519,23 +517,23 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         'claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20251022', 'claude-opus-4-5',
         'claude-3-5-haiku-20241022', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229',
       ]
-      if (provider === 'anthropic') return json(res, { models: ANTHROPIC_MODELS })
+      if (provider === 'anthropic') return json(res, { models: ANTHROPIC_MODELS }, 200, corsSpinny)
       const endpoint = MODEL_ENDPOINTS[provider]
-      if (!endpoint) return json(res, { error: 'unknown provider', models: [] }, 400)
+      if (!endpoint) return json(res, { error: 'unknown provider', models: [] }, 400, corsSpinny)
       try {
         const vault = new Vault()
         const stored = vault.get(VAULT_NS, provider)
         vault.close()
         const apiKey = stored?.key || ''
-        if (!apiKey) return json(res, { error: 'no key', models: [] }, 402)
+        if (!apiKey) return json(res, { error: 'no key', models: [] }, 402, corsSpinny)
         const r = await fetch(endpoint, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10000) })
-        if (!r.ok) return json(res, { error: `provider ${r.status}`, models: [] }, 502)
+        if (!r.ok) return json(res, { error: `provider ${r.status}`, models: [] }, 502, corsSpinny)
         const data = await r.json()
         let models = (data.data || []).map(m => m.id)
         if (provider === 'openai') models = models.filter(id => /^(gpt-|o1|o3|o4)/.test(id)).sort()
         if (provider === 'xai') models = models.filter(id => id.startsWith('grok')).sort()
-        return json(res, { models })
-      } catch (err) { return json(res, { error: err.message, models: [] }, 502) }
+        return json(res, { models }, 200, corsSpinny)
+      } catch (err) { return json(res, { error: err.message, models: [] }, 502, corsSpinny) }
     }
 
     // Serve React app static files
