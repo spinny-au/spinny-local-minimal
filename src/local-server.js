@@ -93,7 +93,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
 
     if (req.method === 'OPTIONS') {
       const p = url.pathname
-      if (p.startsWith('/api/vault/') || p === '/api/cloud-chat') corsSpinny(res)
+      if (p.startsWith('/api/vault/') || p === '/api/cloud-chat' || p === '/api/models') corsSpinny(res)
       else cors(res)
       res.writeHead(204); return res.end()
     }
@@ -504,6 +504,38 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         if (!res.writableEnded) res.end()
       })
       return
+    }
+
+    // Fetch live model list from provider using vault key
+    if (url.pathname === '/api/models' && req.method === 'GET') {
+      corsSpinny(res)
+      const provider = url.searchParams.get('provider') || ''
+      const MODEL_ENDPOINTS = {
+        openai:     'https://api.openai.com/v1/models',
+        xai:        'https://api.x.ai/v1/models',
+        openrouter: 'https://openrouter.ai/api/v1/models',
+      }
+      const ANTHROPIC_MODELS = [
+        'claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20251022', 'claude-opus-4-5',
+        'claude-3-5-haiku-20241022', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229',
+      ]
+      if (provider === 'anthropic') return json(res, { models: ANTHROPIC_MODELS })
+      const endpoint = MODEL_ENDPOINTS[provider]
+      if (!endpoint) return json(res, { error: 'unknown provider', models: [] }, 400)
+      try {
+        const vault = new Vault()
+        const stored = vault.get(VAULT_NS, provider)
+        vault.close()
+        const apiKey = stored?.key || ''
+        if (!apiKey) return json(res, { error: 'no key', models: [] }, 402)
+        const r = await fetch(endpoint, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10000) })
+        if (!r.ok) return json(res, { error: `provider ${r.status}`, models: [] }, 502)
+        const data = await r.json()
+        let models = (data.data || []).map(m => m.id)
+        if (provider === 'openai') models = models.filter(id => /^(gpt-|o1|o3|o4)/.test(id)).sort()
+        if (provider === 'xai') models = models.filter(id => id.startsWith('grok')).sort()
+        return json(res, { models })
+      } catch (err) { return json(res, { error: err.message, models: [] }, 502) }
     }
 
     // Serve React app static files
