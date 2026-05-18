@@ -3,15 +3,28 @@ import { loadState } from "./state.js";
 import { handleTask } from "./tasks.js";
 import { assertFreshIssuedAt, nodeHello } from "./protocol.js";
 
-function defaultRelayUrl(state) {
+function derivedRelayUrl(state) {
   if (state?.relayUrl) return state.relayUrl
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
-  // Derive from the control URL used during pairing (stored in state)
   const ctrl = state?.controlUrl || process.env.SPINNY_CONTROL_URL || ''
   if (ctrl) {
     const ws = ctrl.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/$/, '')
     return `${ws}/api/local-nodes/relay/node`
   }
+  return null
+}
+
+async function fetchRelayUrl(state) {
+  // Ask the control plane — works for nodes paired before relayUrl was stored
+  const ctrl = state?.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au'
+  const base = ctrl.replace(/\/$/, '')
+  try {
+    const res = await fetch(`${base}/api/spinny/local-nodes/relay-url`)
+    if (res.ok) {
+      const data = await res.json()
+      if (data?.relayUrl) return data.relayUrl
+    }
+  } catch {}
   return 'wss://relay.spinny.au/node'
 }
 
@@ -22,7 +35,7 @@ export class RelayClient {
     allowUnsignedTasks = process.env.SPINNY_ALLOW_UNSIGNED_TASKS === "1",
     reconnect = true
   } = {}) {
-    this.relayUrl = relayUrl;
+    this.relayUrl = relayUrl || null;
     this.controlPlanePublicKey = controlPlanePublicKey;
     this.allowUnsignedTasks = allowUnsignedTasks;
     this.reconnect = reconnect;
@@ -32,11 +45,12 @@ export class RelayClient {
     this.seenTasks = new Set();
   }
 
-  connect() {
+  async connect() {
     const state = loadState();
     if (!state.paired) throw new Error("Pair node before connecting to relay");
     const identity = ensureNodeIdentity();
-    const url = this.relayUrl || defaultRelayUrl(state);
+    const url = this.relayUrl || derivedRelayUrl(state) || await fetchRelayUrl(state);
+    this.relayUrl = url; // cache for reconnects
     const socket = new WebSocket(url);
     this.socket = socket;
 

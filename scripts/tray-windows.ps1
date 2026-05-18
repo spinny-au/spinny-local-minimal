@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory=$true)][string]$IconBase64File,
+  [Parameter(Mandatory=$true)][string]$IconFile,
   [Parameter(Mandatory=$true)][string]$StatusFile
 )
 
@@ -18,36 +18,9 @@ function Read-TextFile([string]$Path, [string]$Fallback) {
   return $Fallback
 }
 
-function New-IconFromBase64([string]$Path) {
-  $raw = Read-TextFile $Path ""
-  if ($raw.StartsWith("data:image")) {
-    $raw = $raw.Substring($raw.IndexOf(",") + 1)
-  }
-  $bytes  = [Convert]::FromBase64String($raw)
-  $stream = New-Object System.IO.MemoryStream(,$bytes)
-  $src    = New-Object System.Drawing.Bitmap($stream)
-
-  # Scale to the DPI-aware tray icon size with high-quality interpolation
-  $side   = [System.Windows.Forms.SystemInformation]::SmallIconSize.Width
-  $canvas = New-Object System.Drawing.Bitmap($side, $side, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-  $g      = [System.Drawing.Graphics]::FromImage($canvas)
-  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-  $g.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-  $g.DrawImage($src, 0, 0, $side, $side)
-  $g.Dispose()
-
-  # Pin to script scope — if the Bitmap is GC'd the HICON becomes dangling
-  $script:_TrayIconBitmap = $canvas
-  $hicon  = $canvas.GetHicon()
-  return [System.Drawing.Icon]::FromHandle($hicon)
-}
-
-# Keep a script-level reference so the GC never collects the Bitmap whose
-# pixel data backs the HICON — a collected Bitmap corrupts the tray icon.
-$script:_TrayIconBitmap = $null
-
+# Load icon directly from .ico file — avoids all GC / HICON lifetime issues
 $notify = New-Object System.Windows.Forms.NotifyIcon
-$notify.Icon = New-IconFromBase64 $IconBase64File
+$notify.Icon = New-Object System.Drawing.Icon($IconFile)
 $notify.Text = "Spinny Local"
 $notify.Visible = $true
 

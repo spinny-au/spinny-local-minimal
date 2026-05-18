@@ -36,6 +36,29 @@ function statusLabel(state, relayConnected) {
   return state.paired ? (healthy ? 'Healthy' : 'Relay offline') : 'Pairing needed'
 }
 
+// Convert a PNG data URL to a minimal ICO file buffer (PNG-in-ICO, supported since Vista)
+function pngDataUrlToIco(dataUrl) {
+  const b64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl
+  const png = Buffer.from(b64, 'base64')
+  // Read actual width/height from PNG IHDR chunk (bytes 16-23)
+  const w = png.readUInt32BE(16)
+  const h = png.readUInt32BE(20)
+  const ico = Buffer.allocUnsafe(22 + png.length)
+  ico.writeUInt16LE(0, 0)                   // reserved
+  ico.writeUInt16LE(1, 2)                   // type = icon
+  ico.writeUInt16LE(1, 4)                   // count = 1
+  ico[6] = w > 255 ? 0 : w                  // width  (0 means 256)
+  ico[7] = h > 255 ? 0 : h                  // height
+  ico[8] = 0                                // color count (0 = true color)
+  ico[9] = 0                                // reserved
+  ico.writeUInt16LE(1, 10)                  // planes
+  ico.writeUInt16LE(32, 12)                 // bit depth
+  ico.writeUInt32LE(png.length, 14)         // image data size
+  ico.writeUInt32LE(22, 18)                 // image data offset
+  png.copy(ico, 22)
+  return ico
+}
+
 function trayRuntimeDir() {
   const dir = join(process.env.LOCALAPPDATA || process.cwd(), 'SpinnyLocalMinimal', 'tray')
   mkdirSync(dir, { recursive: true })
@@ -50,9 +73,9 @@ function writeWindowsTrayStatus(getStatus) {
 
 function startWindowsTray({ getStatus } = {}) {
   const dir = trayRuntimeDir()
-  const iconPath = join(dir, 'spinny-icon.b64')
+  const iconPath = join(dir, 'spinny-icon.ico')
   const statusPath = join(dir, 'status.txt')
-  writeFileSync(iconPath, ICON_BASE64, 'utf8')
+  writeFileSync(iconPath, pngDataUrlToIco(ICON_BASE64))
   writeWindowsTrayStatus(getStatus)
 
   const child = spawn('powershell.exe', [
@@ -62,7 +85,7 @@ function startWindowsTray({ getStatus } = {}) {
     '-STA',
     '-File',
     join(__dirname, '..', 'scripts', 'tray-windows.ps1'),
-    '-IconBase64File',
+    '-IconFile',
     iconPath,
     '-StatusFile',
     statusPath,

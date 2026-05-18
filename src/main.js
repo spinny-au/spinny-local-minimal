@@ -109,7 +109,7 @@ try {
     relay.on?.('connected', () => { relayConnected = true });
     relay.on?.('disconnected', () => { relayConnected = false });
 
-    relay.connect();
+    relay.connect().catch(() => {});
 
     console.log("Spinny local node running.");
 
