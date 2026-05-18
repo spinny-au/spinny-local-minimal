@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { statePath } from "./paths.js";
+import { ensureNodeIdentity } from "./identity.js";
 
 const DEFAULT_STATE = {
   nodeId: null,
@@ -35,7 +36,8 @@ export function saveState(state) {
     updatedAt: new Date().toISOString()
   };
   if (!next.nodeId) {
-    next.nodeId = `node_${randomUUID()}`;
+    const { publicKeyDer } = ensureNodeIdentity();
+    next.nodeId = `node_${createHash("sha256").update(publicKeyDer).digest("hex").slice(0, 32)}`;
   }
   if (!next.createdAt) {
     next.createdAt = next.updatedAt;
