@@ -94,8 +94,12 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
 
     if (req.method === 'OPTIONS') {
       const p = url.pathname
-      if (p.startsWith('/api/vault/') || p === '/api/cloud-chat' || p === '/api/models') corsSpinny(res)
-      else cors(res)
+      const origin = req.headers.origin || '(no origin)'
+      const pna = req.headers['access-control-request-private-network']
+      if (p.startsWith('/api/vault/') || p === '/api/cloud-chat' || p === '/api/models') {
+        console.log(`[preflight] OPTIONS ${p} origin="${origin}" pna=${pna || 'not-requested'}`)
+        corsSpinny(res)
+      } else cors(res)
       res.writeHead(204); return res.end()
     }
 
@@ -373,6 +377,13 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       })
       req.on('close', () => pull.kill())
       return
+    }
+
+    // ── Request log for vault / cloud-chat / models ───────────────────────
+    if (url.pathname.startsWith('/api/vault') || url.pathname === '/api/cloud-chat' || url.pathname === '/api/models') {
+      const origin = req.headers.origin || '(no origin)'
+      const trusted = isTrustedOrigin(req)
+      console.log(`[vault] ${req.method} ${url.pathname} origin="${origin}" trusted=${trusted}`)
     }
 
     // ── Vault: list stored providers (masked) ─────────────────────────────
