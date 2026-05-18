@@ -69,7 +69,7 @@ export function startLocalServer({ getRelayStatus, onPaired } = {}) {
         accountId: state.accountId,
         relayConnected: getRelayStatus?.() ?? false,
         version: getSystemInfo().version,
-        pairingCode: state.paired ? undefined : (state.pairingCode || null),
+        pairingCode: state.pairingCode || null,
       })
     }
 

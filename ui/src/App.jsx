@@ -299,7 +299,8 @@ function BarRow({ label, used, total }) {
   )
 }
 
-function PairingCode({ code }) {
+function PairingTokenCard({ code }) {
+  const [visible, setVisible] = useState(false)
   const [copied, setCopied] = useState(false)
   const copy = () => {
     navigator.clipboard.writeText(code).then(() => {
@@ -307,17 +308,23 @@ function PairingCode({ code }) {
       setTimeout(() => setCopied(false), 2000)
     })
   }
-  const controlUrl = 'https://spinny.au'
-  const pairingUrl = `${controlUrl}/?localcode=${code}`
+  const pairingUrl = `https://spinny.au/?localcode=${code}`
   return (
-    <div className="pairing-code-wrap">
-      <div className="pairing-code">
-        <div className="pairing-code-value">{code}</div>
-        <button className="btn" onClick={copy}>{copied ? 'Copied!' : 'Copy'}</button>
-      </div>
-      <div className="pairing-hint">
-        Enter this code at <a href={pairingUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>spinny.au → Settings → Local Node</a>, or open that link on any signed-in device.
-      </div>
+    <div className="card">
+      <div className="card-title">Pairing Token</div>
+      {!visible ? (
+        <button className="btn" onClick={() => setVisible(true)}>Show pairing token</button>
+      ) : (
+        <div className="pairing-code-wrap">
+          <div className="pairing-code">
+            <div className="pairing-code-value">{code}</div>
+            <button className="btn" onClick={copy}>{copied ? 'Copied!' : 'Copy'}</button>
+          </div>
+          <div className="pairing-hint">
+            Enter this code at <a href={pairingUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>spinny.au → Settings → Local Node</a> to connect another account to this node.
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -356,19 +363,7 @@ function StatusTab({ status, sysInfo, error }) {
           <span className="row-value">{sysInfo?.version || status.version || '—'}</span>
         </div>
       </div>
-      {!status.paired && (
-        <div className="card">
-          <div className="card-title">Pairing</div>
-          {status.pairingCode ? (
-            <PairingCode code={status.pairingCode} />
-          ) : (
-            <p style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.6 }}>
-              No pairing code yet. Run <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>npm start</code> to generate one, then enter it at{' '}
-              <a href="https://spinny.au" style={{ color: 'var(--accent)' }}>spinny.au</a>.
-            </p>
-          )}
-        </div>
-      )}
+      {status.pairingCode && <PairingTokenCard code={status.pairingCode} />}
     </>
   )
 }
