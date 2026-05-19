@@ -89,9 +89,8 @@ try {
       console.log(`║  Pairing code:  ${code.padEnd(33)}║`);
       console.log(`║  Node address:  ${nodeAddr.padEnd(33)}║`);
       console.log("╠══════════════════════════════════════════════════╣");
-      console.log("║  In Spinny → Settings → Local Node:             ║");
-      console.log("║    1. Enter node address (if not localhost)      ║");
-      console.log("║    2. Enter pairing code                         ║");
+      console.log("║  Pair at spinny.au — no node address needed      ║");
+      console.log("║  (relay pairing — works from any browser)        ║");
       console.log("╚══════════════════════════════════════════════════╝\n");
       qrcode.generate(pairingUrl, { small: true });
       console.log(`QR URL: ${pairingUrl}\n`);
@@ -99,9 +98,51 @@ try {
 
       startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
 
+      // Advertise pairing code to spinny.au so users can pair without direct access
+      const advertise = async () => {
+        try {
+          await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pairingCode: code, nodeId: state.nodeId }),
+            signal: AbortSignal.timeout(10000),
+          });
+        } catch {}
+      };
+      await advertise();
+      const advertiseTimer = setInterval(advertise, 4 * 60 * 1000); // refresh before 15min TTL
+
+      // Poll spinny.au for claim — when someone enters the code on spinny.au,
+      // complete pairing via signed pairNodeDirect (no direct network access needed)
+      const pollTimer = setInterval(async () => {
+        try {
+          const r = await fetch(
+            `${controlUrl}/api/spinny/pairing/status?code=${code}&nodeId=${state.nodeId}`,
+            { signal: AbortSignal.timeout(8000) }
+          );
+          if (!r.ok) return;
+          const body = await r.json();
+          if (body.claimed && body.accountEmail) {
+            clearInterval(pollTimer);
+            clearInterval(advertiseTimer);
+            try {
+              const result = await pairNodeDirect({ accountEmail: body.accountEmail, controlUrl });
+              console.log(`\nPaired via relay! Account: ${result.accountId}`);
+              pairingResolver?.(result);
+            } catch (err) {
+              console.error('Relay pairing completion failed:', err.message);
+              // Reset so next poll can retry with a fresh advertise
+              await advertise();
+            }
+          }
+        } catch {}
+      }, 5000);
+
       // No hard timeout — systemd restarts the service; just wait indefinitely
       const pairingPromise = new Promise(resolve => { pairingResolver = resolve });
-      const paired = await pairingPromise;
+      await pairingPromise;
+      clearInterval(pollTimer);
+      clearInterval(advertiseTimer);
     } else {
       // Already paired — start tray immediately
       startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
