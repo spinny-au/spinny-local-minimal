@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
 import { readFileSync, existsSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -164,7 +165,7 @@ async function readJsonBody(req) {
 }
 
 export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getRelay } = {}) {
-  const server = createServer(async (req, res) => {
+  const handler = async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`)
     const reqOrigin = req.headers.origin || ''
     // Origin-aware corsSpinny for this specific request — reflects www or bare back correctly
@@ -836,15 +837,31 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
 
     res.writeHead(404)
     res.end()
-  })
+  }
 
   const bindHost = process.env.SPINNY_BIND_HOST || '0.0.0.0'
-  server.listen(PORT, bindHost, () => {
-    console.log(`Spinny local panel: http://localhost:${PORT}`)
-  })
+  const tlsCert = process.env.SPINNY_TLS_CERT
+  const tlsKey  = process.env.SPINNY_TLS_KEY
+  const tlsHost = process.env.SPINNY_TLS_HOSTNAME
+
+  let server
+  if (tlsCert && tlsKey && existsSync(tlsCert) && existsSync(tlsKey)) {
+    try {
+      server = createHttpsServer({ cert: readFileSync(tlsCert), key: readFileSync(tlsKey) }, handler)
+      server.listen(PORT, bindHost, () => {
+        console.log(`Spinny local panel: https://${tlsHost || 'localhost'}:${PORT}`)
+      })
+    } catch (e) {
+      console.warn('[tls] Failed to load certs, falling back to HTTP:', e.message)
+      server = createServer(handler)
+      server.listen(PORT, bindHost, () => console.log(`Spinny local panel: http://localhost:${PORT}`))
+    }
+  } else {
+    server = createServer(handler)
+    server.listen(PORT, bindHost, () => console.log(`Spinny local panel: http://localhost:${PORT}`))
+  }
   server.on('error', (err) => {
     if (err.code !== 'EADDRINUSE') console.error('Local server error:', err.message)
   })
-
   return server
 }
