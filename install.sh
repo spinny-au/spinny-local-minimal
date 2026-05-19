@@ -57,7 +57,6 @@ else
   step "Installing Node.js 22"
   need_sudo
   # Download setup script to a temp file — avoids pipe-to-bash issues
-  local _setup
   _setup=$(mktemp)
   curl -fsSL https://deb.nodesource.com/setup_22.x -o "$_setup"
   sudo bash "$_setup"
