@@ -73,9 +73,10 @@ function writeWindowsTrayStatus(getStatus) {
 
 function startWindowsTray({ getStatus } = {}) {
   const dir = trayRuntimeDir()
-  const iconPath = join(dir, 'spinny-icon.ico')
+  const iconPath = join(dir, 'spinny-icon.png')
   const statusPath = join(dir, 'status.txt')
-  writeFileSync(iconPath, pngDataUrlToIco(ICON_BASE64))
+  const pngBase64 = ICON_BASE64.includes(',') ? ICON_BASE64.split(',')[1] : ICON_BASE64
+  writeFileSync(iconPath, Buffer.from(pngBase64, 'base64'))
   writeWindowsTrayStatus(getStatus)
 
   const child = spawn('powershell.exe', [
