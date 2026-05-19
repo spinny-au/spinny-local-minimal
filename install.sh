@@ -3,7 +3,7 @@
 # Usage: bash install.sh
 set -euo pipefail
 
-REPO_URL="https://github.com/spinny-au/spinny-local-minimal/archive/refs/heads/main.tar.gz"
+REPO_URL="https://github.com/spinny-au/spinny-local-minimal.git"
 INSTALL_DIR="$HOME/.spinny/node"
 STATE_DIR="$HOME/.spinny-local"
 SERVICE_NAME="spinny-local"
@@ -104,17 +104,15 @@ else
   echo -e "  ${DIM}  curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up${RST}"
 fi
 
-# ── 4. Download spinny-local-minimal (curl + tar, no git needed) ──────────────
-step "Downloading Spinny Local Node"
-mkdir -p "$INSTALL_DIR"
-if [[ -f "$INSTALL_DIR/package.json" ]]; then
-  echo "  Updating existing install..."
-  curl -fsSL "$REPO_URL" | tar -xz --strip-components=1 -C "$INSTALL_DIR" \
-    --exclude='*/node_modules' --exclude='*/.env'
+# ── 4. Clone / update spinny-local-minimal ───────────────────────────────────
+step "Setting up Spinny Local Node"
+mkdir -p "$(dirname "$INSTALL_DIR")"
+if [[ -d "$INSTALL_DIR/.git" ]]; then
+  git -C "$INSTALL_DIR" pull --ff-only
   ok "Updated to latest"
 else
-  curl -fsSL "$REPO_URL" | tar -xz --strip-components=1 -C "$INSTALL_DIR"
-  ok "Downloaded"
+  git clone "$REPO_URL" "$INSTALL_DIR"
+  ok "Cloned"
 fi
 
 # ── 5. npm install ────────────────────────────────────────────────────────────
@@ -169,12 +167,11 @@ sudo systemctl enable "$SERVICE_NAME" --quiet
 sudo systemctl restart "$SERVICE_NAME"
 ok "Service started"
 
-# ── 8. Git check (informational only) ─────────────────────────────────────────
-GIT_STATUS=""
+# ── 8. Git check ──────────────────────────────────────────────────────────────
 if command -v git &>/dev/null; then
-  GIT_STATUS="✓ Available  (updates: re-run install.sh)"
+  GIT_STATUS="✓ $(git --version)  (updates: re-run install.sh)"
 else
-  GIT_STATUS="✗ Not installed  (updates: re-run install.sh)"
+  GIT_STATUS="✗ Not installed — required for install"
 fi
 
 # ── 9. Collect stats for banner ──────────────────────────────────────────────
