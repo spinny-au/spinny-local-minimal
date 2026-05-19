@@ -307,9 +307,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
               if (!line.trim()) continue
               try {
                 const chunk = JSON.parse(line)
-                // strip <think>...</think> blocks that leak through even with think:false
-                const raw = chunk.message?.content ?? ''
-                const content = raw.replace(/<think>[\s\S]*?<\/think>/g, '').trimStart()
+                const content = chunk.message?.content ?? ''
                 send({ content, done: chunk.done ?? false })
               } catch {}
             }
