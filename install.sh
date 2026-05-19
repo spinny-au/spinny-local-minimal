@@ -106,6 +106,7 @@ step "Checking Tailscale"
 TS_IP=""
 TS_HOSTNAME=""
 TS_HTTPS=false
+TS_CERT_ERROR=""
 if command -v tailscale &>/dev/null; then
   TS_IP=$(tailscale ip --4 2>/dev/null || tailscale ip 2>/dev/null | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1 || true)
   TS_HOSTNAME=$(tailscale status --json 2>/dev/null \
@@ -119,23 +120,36 @@ if command -v tailscale &>/dev/null; then
     if [[ -n "$TS_HOSTNAME" ]]; then
       step "Generating Tailscale HTTPS cert for $TS_HOSTNAME"
       mkdir -p "$CERT_DIR"
-      if tailscale cert \
+      if CERT_OUTPUT=$(sudo tailscale cert \
           --cert-file "$CERT_DIR/cert.pem" \
           --key-file  "$CERT_DIR/key.pem" \
-          "$TS_HOSTNAME" 2>/dev/null; then
+          "$TS_HOSTNAME" 2>&1); then
         TS_HTTPS=true
+        sudo chown "$USER:$(id -gn)" "$CERT_DIR/cert.pem" "$CERT_DIR/key.pem" 2>/dev/null || true
         ok "TLS cert ready — node will serve HTTPS"
       else
+        TS_CERT_ERROR="$CERT_OUTPUT"
         # Fallback: try without explicit flags (older tailscale versions)
         pushd "$CERT_DIR" > /dev/null
-        if tailscale cert "$TS_HOSTNAME" 2>/dev/null; then
+        if CERT_OUTPUT=$(sudo tailscale cert "$TS_HOSTNAME" 2>&1); then
           # Rename to standard names if needed
           mv "${TS_HOSTNAME}.crt" cert.pem 2>/dev/null || true
           mv "${TS_HOSTNAME}.key" key.pem  2>/dev/null || true
+          sudo chown "$USER:$(id -gn)" cert.pem key.pem 2>/dev/null || true
           [[ -f cert.pem && -f key.pem ]] && TS_HTTPS=true
+        else
+          TS_CERT_ERROR="${TS_CERT_ERROR}"$'\n'"${CERT_OUTPUT}"
         fi
         popd > /dev/null
-        $TS_HTTPS && ok "TLS cert ready" || warn "Could not generate TLS cert — node will use HTTP"
+        if ! $TS_HTTPS; then
+          warn "Could not generate Tailscale HTTPS cert - node will use HTTP"
+          [[ -n "$TS_CERT_ERROR" ]] && echo "$TS_CERT_ERROR" | sed 's/^/  tailscale cert: /'
+          warn "Run manually: sudo tailscale cert $TS_HOSTNAME"
+          warn "Until HTTPS is enabled, pairing from spinny.au will fail because browsers block mixed-content requests."
+        fi
+        if $TS_HTTPS; then
+          ok "TLS cert ready"
+        fi
       fi
     fi
   else
@@ -226,13 +240,13 @@ done
 
 # Fallback: read pairing code directly from journal (service prints it on startup)
 if [[ -z "$PAIRING_CODE" ]]; then
-  PAIRING_CODE=$(journalctl -u "$SERVICE_NAME" --no-pager -n 50 2>/dev/null \
+  PAIRING_CODE=$(journalctl -u "$SERVICE_NAME" --no-pager -n 100 2>/dev/null \
     | grep -oP 'Pairing code:\s+\K[A-Z0-9]+' | tail -1 || true)
 fi
 [[ -z "$PAIRING_CODE" ]] && PAIRING_CODE="run: journalctl -u spinny-local -f"
 
 # Pull QR URL from journal
-QR_URL=$(journalctl -u "$SERVICE_NAME" --no-pager -n 50 2>/dev/null \
+QR_URL=$(journalctl -u "$SERVICE_NAME" --no-pager -n 100 2>/dev/null \
   | grep -oP 'QR URL: \K\S+' | tail -1 || true)
 
 CPU_COUNT=$(nproc 2>/dev/null || echo "?")
@@ -298,10 +312,13 @@ printf "  %-18s: %s\n"                                   "Status"    "$STATUS_ST
 echo ""
 printf "  %-18s: %s\n" "Node UI"  "$NODE_UI_URL"
 printf "  %-18s: %s\n" "Local"    "http://localhost:${NODE_PORT}"
+if [[ -n "$TS_IP" ]] && ! $TS_HTTPS; then
+  echo -e "  ${Y}⚠ No HTTPS cert — pair via spinny.au will fail (mixed content). Re-run install.sh after fixing Tailscale cert.${RST}"
+fi
 echo ""
 printf "  %-18s: %s\n" "Pairing code" "$PAIRING_CODE"
 echo -e "                       ${DIM}Enter this in Spinny → Settings → Local Node${RST}"
-[[ -n "$QR_URL" ]] && echo -e "                       ${DIM}${QR_URL}${RST}"
+[[ -n "$QR_URL" ]] && printf "  %-18s: %s\n" "QR URL" "$QR_URL"
 echo ""
 printf "  %-18s: " "Dashboard token"
 echo -e "${Y}${B}${DASH_TOKEN}${RST}"
