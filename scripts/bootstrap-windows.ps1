@@ -75,12 +75,10 @@ function Start-SpinnyBackground {
     if ($old) { Stop-Process -Id ([int]$old) -Force -ErrorAction SilentlyContinue }
     Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
   }
-  $p = Start-Process -FilePath "node" `
-    -ArgumentList "--experimental-sqlite --no-warnings src/main.js start" `
+  $p = Start-Process -FilePath "cmd" `
+    -ArgumentList "/c node --experimental-sqlite --no-warnings src/main.js start >> `"$logFile`" 2>&1" `
     -WorkingDirectory $InstallDir `
     -WindowStyle Hidden `
-    -RedirectStandardOutput $logFile `
-    -RedirectStandardError  $logFile `
     -PassThru
   $p.Id | Set-Content $pidFile
   Write-Ok "Spinny is running in the background (PID $($p.Id))"
