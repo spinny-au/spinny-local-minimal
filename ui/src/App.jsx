@@ -370,6 +370,156 @@ function PairingTokenCard({ code }) {
   )
 }
 
+function AccessCard({ ownerEmail }) {
+  const [access, setAccess] = useState(null)
+  const [addEmail, setAddEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/node/access')
+      if (r.ok) setAccess(await r.json())
+    } catch {}
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const patch = async (patch) => {
+    setBusy(true)
+    try {
+      await fetch('/api/node/access', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      await load()
+    } finally { setBusy(false) }
+  }
+
+  const addUser = async () => {
+    const email = addEmail.toLowerCase().trim()
+    if (!email || !email.includes('@')) return
+    setBusy(true); setMsg(null)
+    try {
+      const r = await fetch('/api/node/access/users', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Failed')
+      setAddEmail('')
+      await load()
+    } catch (e) { setMsg({ type: 'err', text: e.message }) }
+    setBusy(false)
+  }
+
+  const removeUser = async (email) => {
+    setBusy(true)
+    try {
+      await fetch(`/api/node/access/users/${encodeURIComponent(email)}`, { method: 'DELETE' })
+      await load()
+    } finally { setBusy(false) }
+  }
+
+  const approveRequest = async (email, action) => {
+    setBusy(true)
+    try {
+      await fetch('/api/node/access/approve', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, action }),
+      })
+      await load()
+    } finally { setBusy(false) }
+  }
+
+  if (!access) return null
+
+  const { multiAccount, locked, allowedUsers = [], pendingRequests = [] } = access
+  const allAccounts = [
+    { email: ownerEmail, owner: true },
+    ...allowedUsers.filter(u => u.email !== ownerEmail).map(u => ({ email: u.email, owner: false })),
+  ]
+
+  return (
+    <div className="card">
+      <div className="card-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        Paired account{allAccounts.length !== 1 ? 's' : ''}
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            className={`btn${multiAccount ? '' : ' secondary'}`}
+            style={{ fontSize: 11, padding: '2px 10px' }}
+            disabled={busy}
+            onClick={() => patch({ multiAccount: !multiAccount, ...(multiAccount ? { locked: false } : {}) })}
+          >
+            {multiAccount ? 'Multi-account' : 'Single account'}
+          </button>
+          {multiAccount && (
+            <button
+              className={`btn${locked ? '' : ' secondary'}`}
+              style={{ fontSize: 11, padding: '2px 10px', background: locked ? 'var(--err)' : undefined }}
+              disabled={busy}
+              onClick={() => patch({ locked: !locked })}
+              title={locked ? 'Unlock — allow new accounts to join' : 'Lock — no new accounts can join'}
+            >
+              {locked ? '🔒 Locked' : '🔓 Unlocked'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {allAccounts.map(({ email, owner }) => (
+        <div key={email} className="row" style={{ paddingTop: 8, paddingBottom: 8 }}>
+          <span className="row-value" style={{ fontFamily: 'inherit', fontSize: 13 }}>
+            {email}
+            {owner && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace' }}>OWNER</span>}
+          </span>
+          {!owner && (
+            <button className="btn secondary" style={{ fontSize: 11, padding: '2px 8px' }} disabled={busy} onClick={() => removeUser(email)}>
+              Remove
+            </button>
+          )}
+        </div>
+      ))}
+
+      {multiAccount && !locked && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <input
+            className="install-input"
+            placeholder="Add account by email"
+            value={addEmail}
+            onChange={e => setAddEmail(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addUser()}
+            style={{ fontSize: 13 }}
+          />
+          <button className="btn" style={{ flexShrink: 0 }} disabled={busy || !addEmail.includes('@')} onClick={addUser}>
+            Add
+          </button>
+        </div>
+      )}
+
+      {msg && <div className={`msg ${msg.type}`} style={{ marginTop: 8 }}>{msg.text}</div>}
+
+      {pendingRequests.length > 0 && (
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--bg-border)' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--warn)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            {pendingRequests.length} pending request{pendingRequests.length !== 1 ? 's' : ''}
+          </div>
+          {pendingRequests.map(r => (
+            <div key={r.email} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 13, marginBottom: 4 }}>{r.email}</div>
+              {r.message && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>{r.message}</div>}
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn" style={{ fontSize: 11, padding: '3px 10px' }} disabled={busy} onClick={() => approveRequest(r.email, 'approve')}>Approve</button>
+                <button className="btn secondary" style={{ fontSize: 11, padding: '3px 10px' }} disabled={busy} onClick={() => approveRequest(r.email, 'deny')}>Deny</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function StatusTab({ status, sysInfo, error }) {
   if (error) return <div className="error-banner">Could not connect to local server: {error}</div>
   if (!status) return <div className="loading">Loading status...</div>
@@ -388,10 +538,6 @@ function StatusTab({ status, sysInfo, error }) {
         <div className="row">
           <span className="row-label">Node ID</span>
           <span className="row-value">{status.nodeId || '—'}</span>
-        </div>
-        <div className="row">
-          <span className="row-label">Paired account</span>
-          <span className="row-value">{status.accountId || '—'}</span>
         </div>
         <div className="row">
           <span className="row-label">Relay</span>
@@ -415,6 +561,7 @@ function StatusTab({ status, sysInfo, error }) {
         </div>
       </div>
       {status.pairingCode && <PairingTokenCard code={status.pairingCode} />}
+      {status.accountId && <AccessCard ownerEmail={status.accountId} />}
     </>
   )
 }

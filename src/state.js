@@ -17,6 +17,7 @@ const DEFAULT_STATE = {
   createdAt: null,
   updatedAt: null,
   multiAccount: false,
+  locked: false,
   allowedUsers: [],
   pendingRequests: [],
 };

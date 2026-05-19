@@ -205,26 +205,29 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
 
     // ── Multi-account access management ──────────────────────────────────────
 
-    // GET /api/node/access — returns multiAccount toggle + user lists
+    // GET /api/node/access — returns multiAccount, locked, user lists
     if (url.pathname === '/api/node/access' && req.method === 'GET') {
       if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
       const state = loadState()
       return json(res, {
         multiAccount: !!state.multiAccount,
+        locked: !!state.locked,
         allowedUsers: state.allowedUsers || [],
         pendingRequests: state.pendingRequests || [],
       }, 200, corsSpinnyReq)
     }
 
-    // PATCH /api/node/access — toggle multiAccount (owner only)
+    // PATCH /api/node/access — update multiAccount and/or locked (owner only)
     if (url.pathname === '/api/node/access' && req.method === 'PATCH') {
       if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
       try {
         const body = await readJsonBody(req)
-        if (typeof body.multiAccount !== 'boolean') return json(res, { error: 'multiAccount boolean required' }, 400, corsSpinnyReq)
         const state = loadState()
-        saveState({ ...state, multiAccount: body.multiAccount })
-        return json(res, { ok: true, multiAccount: body.multiAccount }, 200, corsSpinnyReq)
+        const next = { ...state }
+        if (typeof body.multiAccount === 'boolean') next.multiAccount = body.multiAccount
+        if (typeof body.locked === 'boolean') next.locked = body.locked
+        saveState(next)
+        return json(res, { ok: true, multiAccount: next.multiAccount, locked: next.locked }, 200, corsSpinnyReq)
       } catch (err) { return json(res, { error: err.message }, 400, corsSpinnyReq) }
     }
 
@@ -267,6 +270,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         if (!email || !email.includes('@')) return json(res, { error: 'valid email required' }, 400, corsSpinnyReq)
         const state = loadState()
         if (!state.multiAccount) return json(res, { error: 'this node is not accepting new users' }, 403, corsSpinnyReq)
+        if (state.locked) return json(res, { error: 'this node is locked — no new accounts can join' }, 403, corsSpinnyReq)
         if ((state.allowedUsers || []).some(u => u.email === email)) return json(res, { ok: true, note: 'already allowed' }, 200, corsSpinnyReq)
         const existing = (state.pendingRequests || []).find(r => r.email === email)
         const pendingRequests = existing
@@ -531,6 +535,11 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       if (!code || code.toUpperCase() !== (state.pairingCode || '').toUpperCase()) {
         res.writeHead(400, corsHeaders)
         return res.end(JSON.stringify({ error: 'Invalid pairing code' }))
+      }
+      // If locked and already has an owner, block new pairings
+      if (state.locked && state.accountId && email.toLowerCase().trim() !== state.accountId) {
+        res.writeHead(403, corsHeaders)
+        return res.end(JSON.stringify({ error: 'This node is locked — no new accounts can be added' }))
       }
       if (!email || !email.includes('@')) {
         res.writeHead(400, corsHeaders)
