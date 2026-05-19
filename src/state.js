@@ -15,7 +15,10 @@ const DEFAULT_STATE = {
   nodePublicKey: null,
   controlPlanePublicKey: null,
   createdAt: null,
-  updatedAt: null
+  updatedAt: null,
+  multiAccount: false,
+  allowedUsers: [],
+  pendingRequests: [],
 };
 
 export function generatePairingCode() {

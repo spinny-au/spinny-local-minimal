@@ -126,6 +126,14 @@ export function prepareInstruction(packet, now = Date.now()) {
   }
   nonceStore.set(packet.nonce, now);
 
+  // Access control — check user_id against multi-account policy
+  const userId = packet.user_id || null
+  if (userId && userId !== state.accountId) {
+    if (!state.multiAccount) throw new InstructionError('access_denied', 403)
+    const allowed = (state.allowedUsers || []).some(u => u.email === userId)
+    if (!allowed) throw new InstructionError('access_denied', 403)
+  }
+
   const localPolicy = loadPrivacyPolicy();
   const { policy, policyTightened } = intersectPrivacyPolicies(packet.policy, localPolicy);
   if (policyTightened) {
@@ -514,7 +522,8 @@ function instructionSignaturePayload(packet) {
     expires_at: packet.expires_at,
     op: packet.op,
     policy: packet.policy || {},
-    payload: packet.payload || {}
+    payload: packet.payload || {},
+    user_id: packet.user_id || null,
   };
 }
 

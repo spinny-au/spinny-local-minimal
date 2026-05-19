@@ -130,6 +130,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       const pna = req.headers['access-control-request-private-network']
       if (
         p.startsWith('/api/vault/')
+        || p.startsWith('/api/node/')
         || p === '/api/cloud-chat'
         || p === '/api/models'
         || p === '/api/instruction'
@@ -200,6 +201,98 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     if (url.pathname === '/api/memory/stats' && req.method === 'GET') {
       if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
       return json(res, memoryStats(), 200, corsSpinnyReq)
+    }
+
+    // ── Multi-account access management ──────────────────────────────────────
+
+    // GET /api/node/access — returns multiAccount toggle + user lists
+    if (url.pathname === '/api/node/access' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const state = loadState()
+      return json(res, {
+        multiAccount: !!state.multiAccount,
+        allowedUsers: state.allowedUsers || [],
+        pendingRequests: state.pendingRequests || [],
+      }, 200, corsSpinnyReq)
+    }
+
+    // PATCH /api/node/access — toggle multiAccount (owner only)
+    if (url.pathname === '/api/node/access' && req.method === 'PATCH') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        if (typeof body.multiAccount !== 'boolean') return json(res, { error: 'multiAccount boolean required' }, 400, corsSpinnyReq)
+        const state = loadState()
+        saveState({ ...state, multiAccount: body.multiAccount })
+        return json(res, { ok: true, multiAccount: body.multiAccount }, 200, corsSpinnyReq)
+      } catch (err) { return json(res, { error: err.message }, 400, corsSpinnyReq) }
+    }
+
+    // POST /api/node/access/users — owner adds a user by email
+    if (url.pathname === '/api/node/access/users' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        const email = (body.email || '').toLowerCase().trim()
+        if (!email || !email.includes('@')) return json(res, { error: 'valid email required' }, 400, corsSpinnyReq)
+        const state = loadState()
+        const existing = (state.allowedUsers || []).some(u => u.email === email)
+        if (existing) return json(res, { ok: true, note: 'already in list' }, 200, corsSpinnyReq)
+        const allowedUsers = [...(state.allowedUsers || []), { email, addedAt: new Date().toISOString() }]
+        // also clear from pending
+        const pendingRequests = (state.pendingRequests || []).filter(r => r.email !== email)
+        saveState({ ...state, allowedUsers, pendingRequests })
+        return json(res, { ok: true, email }, 200, corsSpinnyReq)
+      } catch (err) { return json(res, { error: err.message }, 400, corsSpinnyReq) }
+    }
+
+    // DELETE /api/node/access/users/:email — owner removes a user
+    const accessUserDel = url.pathname.match(/^\/api\/node\/access\/users\/(.+)$/)
+    if (accessUserDel && req.method === 'DELETE') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const email = decodeURIComponent(accessUserDel[1]).toLowerCase().trim()
+      const state = loadState()
+      const allowedUsers = (state.allowedUsers || []).filter(u => u.email !== email)
+      saveState({ ...state, allowedUsers })
+      return json(res, { ok: true, email }, 200, corsSpinnyReq)
+    }
+
+    // POST /api/node/access/request — any user requests access (rate-limited by email)
+    if (url.pathname === '/api/node/access/request' && req.method === 'POST') {
+      corsSpinnyReq(res)
+      try {
+        const body = await readJsonBody(req)
+        const email = (body.email || '').toLowerCase().trim()
+        const message = (body.message || '').slice(0, 200)
+        if (!email || !email.includes('@')) return json(res, { error: 'valid email required' }, 400, corsSpinnyReq)
+        const state = loadState()
+        if (!state.multiAccount) return json(res, { error: 'this node is not accepting new users' }, 403, corsSpinnyReq)
+        if ((state.allowedUsers || []).some(u => u.email === email)) return json(res, { ok: true, note: 'already allowed' }, 200, corsSpinnyReq)
+        const existing = (state.pendingRequests || []).find(r => r.email === email)
+        const pendingRequests = existing
+          ? (state.pendingRequests || []).map(r => r.email === email ? { ...r, message, requestedAt: new Date().toISOString() } : r)
+          : [...(state.pendingRequests || []), { email, message, requestedAt: new Date().toISOString() }]
+        saveState({ ...state, pendingRequests })
+        return json(res, { ok: true }, 200, corsSpinnyReq)
+      } catch (err) { return json(res, { error: err.message }, 400, corsSpinnyReq) }
+    }
+
+    // POST /api/node/access/approve — owner approves or denies a pending request
+    if (url.pathname === '/api/node/access/approve' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        const email = (body.email || '').toLowerCase().trim()
+        const action = body.action // 'approve' | 'deny'
+        if (!email || !['approve', 'deny'].includes(action)) return json(res, { error: 'email and action required' }, 400, corsSpinnyReq)
+        const state = loadState()
+        const pendingRequests = (state.pendingRequests || []).filter(r => r.email !== email)
+        const allowedUsers = action === 'approve'
+          ? [...(state.allowedUsers || []).filter(u => u.email !== email), { email, addedAt: new Date().toISOString() }]
+          : (state.allowedUsers || [])
+        saveState({ ...state, allowedUsers, pendingRequests })
+        return json(res, { ok: true, email, action }, 200, corsSpinnyReq)
+      } catch (err) { return json(res, { error: err.message }, 400, corsSpinnyReq) }
     }
 
     // Signed Vercel -> local command lane.
