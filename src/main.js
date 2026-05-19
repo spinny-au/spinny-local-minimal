@@ -101,13 +101,16 @@ try {
       // Advertise pairing code to spinny.au so users can pair without direct access
       const advertise = async () => {
         try {
-          await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
+          const r = await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pairingCode: code, nodeId: state.nodeId }),
             signal: AbortSignal.timeout(10000),
           });
-        } catch {}
+          console.log(`[relay-pair] advertise → ${r.status}`);
+        } catch (err) {
+          console.error('[relay-pair] advertise failed:', err.message);
+        }
       };
       await advertise();
       const advertiseTimer = setInterval(advertise, 4 * 60 * 1000); // refresh before 15min TTL
@@ -120,22 +123,24 @@ try {
             `${controlUrl}/api/spinny/pairing/status?code=${code}&nodeId=${state.nodeId}`,
             { signal: AbortSignal.timeout(8000) }
           );
-          if (!r.ok) return;
           const body = await r.json();
+          if (!r.ok) { console.error('[relay-pair] poll error:', r.status, body); return; }
           if (body.claimed && body.accountEmail) {
             clearInterval(pollTimer);
             clearInterval(advertiseTimer);
+            console.log(`[relay-pair] claimed by ${body.accountEmail} — completing pairing…`);
             try {
               const result = await pairNodeDirect({ accountEmail: body.accountEmail, controlUrl });
-              console.log(`\nPaired via relay! Account: ${result.accountId}`);
+              console.log(`[relay-pair] paired! Account: ${result.accountId}`);
               pairingResolver?.(result);
             } catch (err) {
-              console.error('Relay pairing completion failed:', err.message);
-              // Reset so next poll can retry with a fresh advertise
+              console.error('[relay-pair] pairNodeDirect failed:', err.message);
               await advertise();
             }
           }
-        } catch {}
+        } catch (err) {
+          console.error('[relay-pair] poll failed:', err.message);
+        }
       }, 5000);
 
       // No hard timeout — systemd restarts the service; just wait indefinitely
