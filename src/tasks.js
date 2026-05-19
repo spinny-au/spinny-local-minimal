@@ -3,6 +3,8 @@ import { loadState } from "./state.js";
 import { taskProgress, taskResult } from "./protocol.js";
 import { Vault } from "./vault.js";
 import { importModelBundleFromUrl } from "./model-bundles.js";
+import { getSystemInfo } from "./system-info.js";
+import { getLines } from "./log-buffer.js";
 
 export async function handleTask(task, { send, ollama = new OllamaClient() } = {}) {
   const state = loadState();
@@ -68,6 +70,19 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
     } finally {
       vault.close();
     }
+  }
+
+  if (task.type === "node.system_info") {
+    const info = getSystemInfo();
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result: info }));
+    return info;
+  }
+
+  if (task.type === "node.logs") {
+    const limit = Math.min(200, Math.max(1, Number(task.params?.limit) || 100));
+    const lines = getLines(limit);
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result: { lines } }));
+    return { lines };
   }
 
   throw new Error(`Unsupported task type: ${task.type}`);
