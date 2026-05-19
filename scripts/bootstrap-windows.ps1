@@ -49,11 +49,43 @@ function Write-Shortcut {
 }
 
 function Register-Startup {
+  # VBScript wrapper — launches node silently with no console window so the
+  # startup folder entry doesn't flash a terminal on login.
   $startupDir  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-  $startupPath = Join-Path $startupDir "Spinny Local Minimal.cmd"
-  $cmd = "@echo off`r`ncd /d `"$InstallDir`"`r`nnpm start >> `"%LOCALAPPDATA%\SpinnyLocalMinimal\spinny-local.log`" 2>&1`r`n"
-  Set-Content -LiteralPath $startupPath -Value $cmd -Encoding ASCII
-  Write-Ok "Will start automatically on login"
+  $startupPath = Join-Path $startupDir "Spinny Local Minimal.vbs"
+  $logFile     = "$env:LOCALAPPDATA\SpinnyLocalMinimal\spinny-local.log"
+  $vbs = @"
+Dim oShell
+Set oShell = WScript.CreateObject("WScript.Shell")
+oShell.CurrentDirectory = "$InstallDir"
+oShell.Run "node --experimental-sqlite --no-warnings src\main.js start >> ""$logFile"" 2>&1", 0, False
+"@
+  Set-Content -LiteralPath $startupPath -Value $vbs -Encoding ASCII
+  Write-Ok "Will start automatically on login (hidden, no terminal window)"
+}
+
+function Start-SpinnyBackground {
+  $logDir = "$env:LOCALAPPDATA\SpinnyLocalMinimal"
+  $logFile = "$logDir\spinny-local.log"
+  $pidFile = "$logDir\spinny-local.pid"
+  New-Item -ItemType Directory -Force $logDir | Out-Null
+  # Kill any previous instance recorded in the pid file
+  if (Test-Path $pidFile) {
+    $old = Get-Content $pidFile -ErrorAction SilentlyContinue
+    if ($old) { Stop-Process -Id ([int]$old) -Force -ErrorAction SilentlyContinue }
+    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+  }
+  $p = Start-Process -FilePath "node" `
+    -ArgumentList "--experimental-sqlite --no-warnings src/main.js start" `
+    -WorkingDirectory $InstallDir `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $logFile `
+    -RedirectStandardError  $logFile `
+    -PassThru
+  $p.Id | Set-Content $pidFile
+  Write-Ok "Spinny is running in the background (PID $($p.Id))"
+  Write-Ok "You can close this terminal — the node stays alive."
+  Write-Ok "Logs: $logFile"
 }
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -104,7 +136,7 @@ if ($update) {
   Write-Host "  Updated! Starting Spinny..." -ForegroundColor Green
   Write-Host ""
   Set-Location $InstallDir
-  node --experimental-sqlite --no-warnings src/main.js start
+  Start-SpinnyBackground
   exit
 }
 
@@ -227,4 +259,4 @@ Write-Host ""
 Write-Shortcut
 
 Set-Location $InstallDir
-node --experimental-sqlite --no-warnings src/main.js start
+Start-SpinnyBackground
