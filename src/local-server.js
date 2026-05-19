@@ -12,6 +12,15 @@ import { getSystemInfo } from './system-info.js'
 import { getLines } from './log-buffer.js'
 import { Vault } from './vault.js'
 import { exportModelBundle, importModelBundle, importModelBundleFromUrl, getBundleReadStream } from './model-bundles.js'
+import {
+  executeInstruction,
+  loadPrivacyPolicy,
+  memoryStats,
+  prepareInstruction,
+  readReceipts,
+  recordRejectedInstruction,
+  savePrivacyPolicy,
+} from './instruction-handler.js'
 
 const downloads = new Map() // model -> { status, progress, done, success, startedAt }
 
@@ -33,7 +42,7 @@ function maskKey(key) {
 function corsSpinny(res, reqOrigin) {
   const allow = (reqOrigin && SPINNY_ORIGINS.has(reqOrigin)) ? reqOrigin : 'https://spinny.au'
   res.setHeader('Access-Control-Allow-Origin', allow)
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   res.setHeader('Access-Control-Allow-Private-Network', 'true')
   res.setHeader('Vary', 'Origin')
@@ -61,7 +70,7 @@ const MIME = {
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 }
 
@@ -89,6 +98,25 @@ function serveStatic(res, filePath) {
   res.end(readFileSync(filePath))
 }
 
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = ''
+    req.on('data', d => { body += d })
+    req.on('end', () => resolve(body))
+    req.on('error', reject)
+  })
+}
+
+async function readJsonBody(req) {
+  const body = await readBody(req)
+  try { return JSON.parse(body || '{}') } catch {
+    const error = new Error('Invalid request')
+    error.status = 400
+    error.code = 'invalid_json'
+    throw error
+  }
+}
+
 export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getRelay } = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`)
@@ -100,7 +128,15 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       const p = url.pathname
       const origin = req.headers.origin || '(no origin)'
       const pna = req.headers['access-control-request-private-network']
-      if (p.startsWith('/api/vault/') || p === '/api/cloud-chat' || p === '/api/models') {
+      if (
+        p.startsWith('/api/vault/')
+        || p === '/api/cloud-chat'
+        || p === '/api/models'
+        || p === '/api/instruction'
+        || p === '/api/memory/stats'
+        || p === '/api/privacy'
+        || p === '/api/receipts'
+      ) {
         console.log(`[preflight] OPTIONS ${p} origin="${origin}" pna=${pna || 'not-requested'}`)
         corsSpinnyReq(res)
       } else cors(res)
@@ -136,6 +172,69 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     if (url.pathname === '/api/logs' && req.method === 'GET') {
       const n = parseInt(url.searchParams.get('n') || '200', 10)
       return json(res, { lines: getLines(n) })
+    }
+
+    // Local privacy firewall configuration. This is the user's own machine
+    // setting, so it is intentionally unsigned.
+    if (url.pathname === '/api/privacy' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      return json(res, loadPrivacyPolicy(), 200, corsSpinnyReq)
+    }
+
+    if (url.pathname === '/api/privacy' && req.method === 'PUT') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const parsed = await readJsonBody(req)
+        return json(res, savePrivacyPolicy(parsed), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.code || 'invalid_privacy_policy' }, error.status || 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/receipts' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const limit = parseInt(url.searchParams.get('limit') || '20', 10)
+      return json(res, { receipts: readReceipts(limit) }, 200, corsSpinnyReq)
+    }
+
+    if (url.pathname === '/api/memory/stats' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      return json(res, memoryStats(), 200, corsSpinnyReq)
+    }
+
+    // Signed Vercel -> local command lane.
+    if (url.pathname === '/api/instruction' && req.method === 'POST') {
+      let packet
+      let prepared
+      try {
+        packet = await readJsonBody(req)
+        prepared = prepareInstruction(packet)
+      } catch (error) {
+        const code = error.code || 'instruction_rejected'
+        const receipt = error.receipt || recordRejectedInstruction(packet, code)
+        return json(res, { error: code, receipt }, error.status || 400, corsSpinnyReq)
+      }
+
+      if (prepared.op === 'infer.run') {
+        corsSpinnyReq(res)
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
+        const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
+        try {
+          const result = await executeInstruction(prepared, { onStream: send })
+          send({ done: true, ...result.body })
+        } catch (error) {
+          send({ error: error.code || 'instruction_failed', receipt: error.receipt || null })
+        }
+        if (!res.writableEnded) res.end()
+        return
+      }
+
+      try {
+        const result = await executeInstruction(prepared)
+        return json(res, result.body, result.status, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.code || 'instruction_failed', receipt: error.receipt || null }, error.status || 500, corsSpinnyReq)
+      }
     }
 
     // Reconnect relay

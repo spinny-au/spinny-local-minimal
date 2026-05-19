@@ -13,6 +13,7 @@ const DEFAULT_STATE = {
   relayUrl: null,
   controlUrl: null,
   nodePublicKey: null,
+  controlPlanePublicKey: null,
   createdAt: null,
   updatedAt: null
 };
