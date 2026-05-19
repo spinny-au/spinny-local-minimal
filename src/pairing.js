@@ -1,7 +1,7 @@
 import { ensureNodeIdentity, signJson } from "./identity.js";
 import { loadState, saveState } from "./state.js";
 
-export async function pairNodeDirect({ accountEmail, controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au" }) {
+export async function pairNodeDirect({ accountEmail, controlUrl = process.env.SPINNY_CONTROL_URL || "https://www.spinny.au" }) {
   if (!accountEmail) throw new Error("accountEmail is required");
   const identity = ensureNodeIdentity();
   const state = saveState(loadState());
@@ -37,7 +37,7 @@ export async function pairNodeDirect({ accountEmail, controlUrl = process.env.SP
   });
 }
 
-export async function pairNode({ token, controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au" }) {
+export async function pairNode({ token, controlUrl = process.env.SPINNY_CONTROL_URL || "https://www.spinny.au" }) {
   if (!token) throw new Error("Pairing token is required");
   const identity = ensureNodeIdentity();
   const state = saveState(loadState());

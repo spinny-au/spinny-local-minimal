@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import qrcode from 'qrcode-terminal'
 import { ensureNodeIdentity } from "./identity.js";
 import { ensureVaultKey, Vault } from "./vault.js";
-import { pairNode } from "./pairing.js";
+import { pairNode, pairNodeDirect } from "./pairing.js";
 import { RelayClient } from "./relay.js";
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
@@ -71,7 +71,7 @@ try {
       // Keep same code across restarts so systemd restarts don't change it mid-pairing
       if (!state.pairingCode) state = saveState({ ...state, pairingCode: generatePairingCode() });
       const code = state.pairingCode;
-      const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
+      const controlUrl = process.env.SPINNY_CONTROL_URL || "https://www.spinny.au";
       const pairingUrl = `${controlUrl}/?localcode=${code}`;
 
       // Detect Tailscale IP for remote-node users
@@ -126,16 +126,15 @@ try {
           const body = await r.json();
           if (!r.ok) { console.error('[relay-pair] poll error:', r.status, body); return; }
           if (body.claimed && body.accountEmail) {
-            clearInterval(pollTimer);
-            clearInterval(advertiseTimer);
             console.log(`[relay-pair] claimed by ${body.accountEmail} — completing pairing…`);
             try {
               const result = await pairNodeDirect({ accountEmail: body.accountEmail, controlUrl });
+              clearInterval(pollTimer);
+              clearInterval(advertiseTimer);
               console.log(`[relay-pair] paired! Account: ${result.accountId}`);
               pairingResolver?.(result);
             } catch (err) {
               console.error('[relay-pair] pairNodeDirect failed:', err.message);
-              await advertise();
             }
           }
         } catch (err) {
