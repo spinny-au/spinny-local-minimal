@@ -79,6 +79,12 @@ export function getSystemInfo() {
     version = pkg.version
   } catch {}
 
+  let tailscaleIp = null
+  try {
+    const tsOut = execSync('tailscale ip --4', { timeout: 3000, stdio: 'pipe' }).toString().trim()
+    if (tsOut && /^\d+\.\d+\.\d+\.\d+$/.test(tsOut)) tailscaleIp = tsOut
+  } catch {}
+
   return {
     hostname: os.hostname(),
     platform: os.platform(),
@@ -90,6 +96,7 @@ export function getSystemInfo() {
     gpu,
     ollamaRunning,
     models: ollamaModels,
+    tailscaleIp,
     capabilities: {
       modelInstall: true,
       modelBundleExport: true,

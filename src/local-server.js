@@ -771,7 +771,8 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     res.end()
   })
 
-  server.listen(PORT, '127.0.0.1', () => {
+  const bindHost = process.env.SPINNY_BIND_HOST || '0.0.0.0'
+  server.listen(PORT, bindHost, () => {
     console.log(`Spinny local panel: http://localhost:${PORT}`)
   })
   server.on('error', (err) => {

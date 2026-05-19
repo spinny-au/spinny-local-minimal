@@ -68,36 +68,40 @@ try {
     });
 
     if (!state.paired) {
-      state = saveState({ ...state, pairingCode: generatePairingCode() });
+      // Keep same code across restarts so systemd restarts don't change it mid-pairing
+      if (!state.pairingCode) state = saveState({ ...state, pairingCode: generatePairingCode() });
       const code = state.pairingCode;
       const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
       const pairingUrl = `${controlUrl}/?localcode=${code}`;
 
-      console.log("\n┌──────────────────────────────────────────┐");
-      console.log(`│  Pairing code:  ${code.padEnd(25)}│`);
-      console.log("│  Go to spinny.au → Settings → Local Node │");
-      console.log("│  and enter the code above, or scan QR:   │");
-      console.log("└──────────────────────────────────────────┘\n");
+      // Detect Tailscale IP for remote-node users
+      let tailscaleIp = null;
+      try {
+        const { execSync: _exec } = await import('node:child_process');
+        const ts = _exec('tailscale ip --4', { timeout: 3000, stdio: 'pipe' }).toString().trim();
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(ts)) tailscaleIp = ts;
+      } catch {}
 
-      console.log("Scan to pair from your phone or another device:\n");
+      const nodePort = 47821;
+      const nodeAddr = tailscaleIp ? `${tailscaleIp}:${nodePort}` : `localhost:${nodePort}`;
+
+      console.log("\n╔══════════════════════════════════════════════════╗");
+      console.log(`║  Pairing code:  ${code.padEnd(33)}║`);
+      console.log(`║  Node address:  ${nodeAddr.padEnd(33)}║`);
+      console.log("╠══════════════════════════════════════════════════╣");
+      console.log("║  In Spinny → Settings → Local Node:             ║");
+      console.log("║    1. Enter node address (if not localhost)      ║");
+      console.log("║    2. Enter pairing code                         ║");
+      console.log("╚══════════════════════════════════════════════════╝\n");
       qrcode.generate(pairingUrl, { small: true });
-      console.log(`\nOr open this URL on any signed-in device:\n${pairingUrl}\n`);
-      console.log("Waiting for pairing (5 min timeout)...\n");
+      console.log(`QR URL: ${pairingUrl}\n`);
+      console.log("Waiting for pairing...\n");
 
-      // Start tray AFTER printing QR so a tray crash can't suppress output
       startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
 
-      const TIMEOUT_MS = 5 * 60 * 1000;
+      // No hard timeout — systemd restarts the service; just wait indefinitely
       const pairingPromise = new Promise(resolve => { pairingResolver = resolve });
-      const paired = await Promise.race([
-        pairingPromise,
-        new Promise(resolve => setTimeout(() => resolve(null), TIMEOUT_MS))
-      ]);
-
-      if (!paired) {
-        console.log("Pairing timed out. Run 'npm start' again to retry.");
-        process.exit(0);
-      }
+      const paired = await pairingPromise;
     } else {
       // Already paired — start tray immediately
       startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
