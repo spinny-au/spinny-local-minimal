@@ -82,9 +82,8 @@ step "Configuring firewall"
 if command -v ufw &>/dev/null; then
   if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
     sudo ufw allow "$NODE_PORT/tcp" > /dev/null
-    # Also allow on the Tailscale interface specifically — generic rules don't
-    # always catch traffic arriving on tailscale0 on some Ubuntu versions
-    sudo ufw allow in on tailscale0 to any port "$NODE_PORT" 2>/dev/null || true
+    sudo ufw allow in on tailscale0 to any port "$NODE_PORT" proto tcp 2>/dev/null || true
+    sudo ufw reload > /dev/null 2>&1 || true
     ok "UFW: port $NODE_PORT open (all interfaces + tailscale0)"
   else
     ok "UFW inactive — skipping"
@@ -318,6 +317,24 @@ echo -e "                       ${DIM}${ENV_FILE}${RST}"
 echo ""
 printf "  %-18s: %s\n" "Git" "$GIT_STATUS"
 echo ""
+echo -e "${DIM}--------------------------------------------------------------------${RST}"
+
+# ── Self-test ─────────────────────────────────────────────────────────────────
+if curl -sf --max-time 3 "http://localhost:${NODE_PORT}/health" >/dev/null 2>&1; then
+  echo -e "  ${G}${B}✓ Port ${NODE_PORT} reachable on localhost${RST}"
+else
+  echo -e "  ${R}${B}✗ Port ${NODE_PORT} NOT reachable on localhost — run: journalctl -u spinny-local -f${RST}"
+fi
+
+if [[ -n "$TS_IP" ]]; then
+  if curl -sf --max-time 3 "http://${TS_IP}:${NODE_PORT}/health" >/dev/null 2>&1; then
+    echo -e "  ${G}${B}✓ Port ${NODE_PORT} reachable via Tailscale (${TS_IP})${RST}"
+  else
+    echo -e "  ${R}${B}✗ Port ${NODE_PORT} NOT reachable via Tailscale (${TS_IP}) — firewall issue${RST}"
+    echo -e "    ${DIM}Run: sudo ufw allow in on tailscale0 to any port ${NODE_PORT} proto tcp${RST}"
+  fi
+fi
+
 echo -e "${DIM}--------------------------------------------------------------------${RST}"
 echo -e "  Node is ready. Open ${B}spinny.au${RST} and enter your pairing code."
 echo -e "${DIM}${LINE}${RST}"
