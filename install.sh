@@ -25,23 +25,15 @@ need_sudo() {
   sudo -v
 }
 
-# ── Rainbow print ─────────────────────────────────────────────────────────────
+# ── Rainbow print (16-colour, works in all SSH terminals) ─────────────────────
+# Cycles bold red → yellow → green → cyan → blue → magenta across each line,
+# shifting the starting colour per line for a diagonal wave effect.
+_RAINBOW_COLS=(31 33 32 36 34 35)
 print_rainbow() {
-  local line="$1" hue_base="${2:-0}" len=${#line}
+  local line="$1" offset="${2:-0}" len=${#line}
   for ((i=0; i<len; i++)); do
-    local char="${line:$i:1}"
-    local hue=$(( (hue_base + i * 4) % 360 ))
-    local sector=$(( hue / 60 )) frac=$(( hue % 60 * 255 / 60 ))
-    local r g b
-    case $sector in
-      0) r=255; g=$frac;        b=0   ;;
-      1) r=$((255-frac)); g=255; b=0   ;;
-      2) r=0;   g=255;          b=$frac ;;
-      3) r=0;   g=$((255-frac)); b=255 ;;
-      4) r=$frac; g=0;          b=255 ;;
-      *) r=255; g=0;            b=$((255-frac)) ;;
-    esac
-    printf "\e[1;38;2;%d;%d;%dm%s" $r $g $b "$char"
+    local col=${_RAINBOW_COLS[$(( (i + offset) % 6 ))]}
+    printf "\e[1;%dm%s" "$col" "${line:$i:1}"
   done
   printf "\e[0m\n"
 }
@@ -300,7 +292,7 @@ LINE='===================================================================='
 echo ""
 echo -e "${Y}${B}  ↓  ↓  ↓  ↓  ↓  ↓  ↓   IMPORTANT — COPY & STORE   ↓  ↓  ↓  ↓  ↓  ↓  ↓${RST}"
 echo -e "${DIM}${LINE}${RST}"
-for i in "${!LOGO[@]}"; do print_rainbow "${LOGO[$i]}" $((i * 38)); done
+for i in "${!LOGO[@]}"; do print_rainbow "${LOGO[$i]}" $i; done
 echo -e "${DIM}${LINE}${RST}"
 echo -e "  🚀  ${B}SPINNY LOCAL NODE  v${NODE_VER}  SUCCESSFULLY INSTALLED${RST}  🚀"
 echo -e "${DIM}--------------------------------------------------------------------${RST}"
