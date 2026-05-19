@@ -1,116 +1,145 @@
 #!/usr/bin/env bash
 # Spinny Local Node — Ubuntu auto-installer
 # Usage: bash install.sh
-# Installs Node.js 22, Ollama, the node itself, and registers a systemd service.
-set -e
+set -euo pipefail
 
-REPO_URL="https://github.com/spinny-au/spinny-local-minimal.git"
+REPO_URL="https://github.com/spinny-au/spinny-local-minimal/archive/refs/heads/main.tar.gz"
 INSTALL_DIR="$HOME/.spinny/node"
+STATE_DIR="$HOME/.spinny-local"
 SERVICE_NAME="spinny-local"
 NODE_PORT=47821
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
+# ── Colours ──────────────────────────────────────────────────────────────────
+R='\033[0;31m' G='\033[0;32m' Y='\033[1;33m' C='\033[0;36m'
+B='\033[1m' DIM='\033[2m' RST='\033[0m'
 
-step() { echo -e "\n${CYAN}${BOLD}▶ $1${RESET}"; }
-ok()   { echo -e "${GREEN}✓ $1${RESET}"; }
-warn() { echo -e "${RED}⚠ $1${RESET}"; }
+step() { echo -e "\n${C}${B}▶ $1${RST}"; }
+ok()   { echo -e "${G}✓ $1${RST}"; }
+warn() { echo -e "${Y}⚠ $1${RST}"; }
+die()  { echo -e "${R}✗ $1${RST}" >&2; exit 1; }
 
-require_root_or_sudo() {
-  if [[ $EUID -ne 0 ]] && ! sudo -n true 2>/dev/null; then
-    echo "This installer needs sudo access to install system packages."
-    sudo -v
-  fi
+need_sudo() {
+  [[ $EUID -eq 0 ]] && return
+  sudo -n true 2>/dev/null && return
+  echo "This installer needs sudo for system packages."
+  sudo -v
 }
 
-# ── 1. Node.js 22 ─────────────────────────────────────────────────────────────
+# ── Rainbow print (per-character 24-bit colour, diagonal wave) ────────────────
+print_rainbow() {
+  local line="$1"
+  local hue_base="${2:-0}"
+  local len=${#line}
+  for ((i=0; i<len; i++)); do
+    local char="${line:$i:1}"
+    local hue=$(( (hue_base + i * 4) % 360 ))
+    local sector=$(( hue / 60 ))
+    local frac=$(( hue % 60 * 255 / 60 ))
+    local r g b
+    case $sector in
+      0) r=255; g=$frac;        b=0   ;;
+      1) r=$((255-frac)); g=255; b=0   ;;
+      2) r=0;   g=255;          b=$frac ;;
+      3) r=0;   g=$((255-frac)); b=255 ;;
+      4) r=$frac; g=0;          b=255 ;;
+      *) r=255; g=0;            b=$((255-frac)) ;;
+    esac
+    printf "\e[1;38;2;%d;%d;%dm%s" $r $g $b "$char"
+  done
+  printf "\e[0m\n"
+}
+
+# ── 1. Node.js 22 ────────────────────────────────────────────────────────────
 step "Checking Node.js"
-if node --version 2>/dev/null | grep -q "^v2[2-9]"; then
+if node --version 2>/dev/null | grep -qE '^v2[2-9]'; then
   ok "Node.js $(node --version) already installed"
 else
-  step "Installing Node.js 22 via NodeSource"
-  require_root_or_sudo
-  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-  sudo apt-get install -y nodejs
+  step "Installing Node.js 22"
+  need_sudo
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - -q
+  sudo apt-get install -y nodejs 2>&1 | tail -3
   ok "Node.js $(node --version) installed"
 fi
 
-# ── 2. Ollama ─────────────────────────────────────────────────────────────────
+# ── 2. Ollama ────────────────────────────────────────────────────────────────
 step "Checking Ollama"
 if command -v ollama &>/dev/null; then
-  ok "Ollama already installed: $(ollama --version 2>/dev/null || echo 'unknown version')"
+  ok "Ollama already installed"
 else
   step "Installing Ollama"
   curl -fsSL https://ollama.com/install.sh | sh
   ok "Ollama installed"
 fi
 
-# Ensure Ollama is running
 if ! systemctl is-active --quiet ollama 2>/dev/null; then
-  step "Starting Ollama service"
-  sudo systemctl enable ollama --now 2>/dev/null || ollama serve &>/dev/null &
-  sleep 2
+  sudo systemctl enable ollama --now 2>/dev/null || (ollama serve &>/dev/null & sleep 2)
 fi
 
-# List already-installed models
-MODELS=$(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -v '^$' || true)
-if [[ -n "$MODELS" ]]; then
-  ok "Ollama models already installed:"
-  echo "$MODELS" | sed 's/^/    /'
-else
-  echo -e "  No Ollama models installed yet. Pull one later with: ollama pull llama3.2:3b"
+OLLAMA_RUNNING=false
+OLLAMA_MODELS=()
+if ollama list &>/dev/null; then
+  OLLAMA_RUNNING=true
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == NAME* ]] && continue
+    OLLAMA_MODELS+=("$(echo "$line" | awk '{print $1}')")
+  done < <(ollama list 2>/dev/null | tail -n +2)
 fi
 
-# ── 3. Tailscale (detect, don't auto-install) ─────────────────────────────────
+# ── 3. Tailscale (detect, never force-install) ────────────────────────────────
 step "Checking Tailscale"
+TS_IP=""
 if command -v tailscale &>/dev/null; then
   TS_IP=$(tailscale ip --4 2>/dev/null || true)
   if [[ -n "$TS_IP" ]]; then
-    ok "Tailscale active — node will be reachable at ${BOLD}${TS_IP}:${NODE_PORT}${RESET}"
+    ok "Tailscale active — ${B}${TS_IP}:${NODE_PORT}${RST}"
   else
     warn "Tailscale installed but not connected. Run: sudo tailscale up"
-    TS_IP=""
   fi
 else
-  echo "  Tailscale not installed. For remote access from other devices, install it:"
-  echo "    curl -fsSL https://tailscale.com/install.sh | sh"
-  echo "    sudo tailscale up"
-  TS_IP=""
+  echo -e "  ${DIM}Tailscale not installed. For remote access:${RST}"
+  echo -e "  ${DIM}  curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up${RST}"
 fi
 
-# ── 4. Clone / update the node ────────────────────────────────────────────────
-step "Setting up Spinny local node in $INSTALL_DIR"
-mkdir -p "$(dirname "$INSTALL_DIR")"
-if [[ -d "$INSTALL_DIR/.git" ]]; then
-  git -C "$INSTALL_DIR" pull --ff-only
+# ── 4. Download spinny-local-minimal (curl + tar, no git needed) ──────────────
+step "Downloading Spinny Local Node"
+mkdir -p "$INSTALL_DIR"
+if [[ -f "$INSTALL_DIR/package.json" ]]; then
+  echo "  Updating existing install..."
+  curl -fsSL "$REPO_URL" | tar -xz --strip-components=1 -C "$INSTALL_DIR" \
+    --exclude='*/node_modules' --exclude='*/.env'
   ok "Updated to latest"
 else
-  git clone "$REPO_URL" "$INSTALL_DIR"
-  ok "Cloned"
+  curl -fsSL "$REPO_URL" | tar -xz --strip-components=1 -C "$INSTALL_DIR"
+  ok "Downloaded"
 fi
 
+# ── 5. npm install ────────────────────────────────────────────────────────────
 step "Installing npm dependencies"
 npm install --prefix "$INSTALL_DIR" --omit=dev --silent
 ok "Dependencies ready"
 
-# ── 5. Environment file ───────────────────────────────────────────────────────
+# ── 6. Tokens + .env ─────────────────────────────────────────────────────────
+step "Generating secrets"
 ENV_FILE="$INSTALL_DIR/.env"
-if [[ ! -f "$ENV_FILE" ]]; then
-  cat > "$ENV_FILE" <<EOF
-# Auto-generated by install.sh
-SPINNY_BIND_HOST=0.0.0.0
-EOF
-  ok "Created .env (bind host: 0.0.0.0)"
-else
-  # Ensure SPINNY_BIND_HOST is set
-  grep -q "SPINNY_BIND_HOST" "$ENV_FILE" || echo "SPINNY_BIND_HOST=0.0.0.0" >> "$ENV_FILE"
-  ok ".env already exists — preserved"
+
+# Preserve existing tokens on re-install
+EXISTING_DASH_TOKEN=""
+if [[ -f "$ENV_FILE" ]]; then
+  EXISTING_DASH_TOKEN=$(grep -oP '(?<=SPINNY_DASHBOARD_TOKEN=)\S+' "$ENV_FILE" 2>/dev/null || true)
 fi
 
-# ── 6. systemd service ────────────────────────────────────────────────────────
-step "Installing systemd service: $SERVICE_NAME"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+DASH_TOKEN="${EXISTING_DASH_TOKEN:-$(openssl rand -base64 33 | tr -d '/+=\n' | head -c 44)}"
 
-sudo tee "$SERVICE_FILE" > /dev/null <<EOF
+cat > "$ENV_FILE" <<EOF
+# Auto-generated by install.sh — do not commit
+SPINNY_BIND_HOST=0.0.0.0
+SPINNY_DASHBOARD_TOKEN=${DASH_TOKEN}
+EOF
+ok ".env written (token ${EXISTING_DASH_TOKEN:+preserved}${EXISTING_DASH_TOKEN:-generated})"
+
+# ── 7. systemd service ────────────────────────────────────────────────────────
+step "Installing systemd service"
+sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null <<EOF
 [Unit]
 Description=Spinny Local Node
 After=network-online.target ollama.service
@@ -131,40 +160,98 @@ SyslogIdentifier=spinny-local
 [Install]
 WantedBy=multi-user.target
 EOF
-
 sudo systemctl daemon-reload
-sudo systemctl enable "$SERVICE_NAME"
+sudo systemctl enable "$SERVICE_NAME" --quiet
 sudo systemctl restart "$SERVICE_NAME"
 ok "Service started"
 
-# ── 7. Show pairing info ──────────────────────────────────────────────────────
-echo ""
-echo -e "${CYAN}${BOLD}Waiting for pairing code...${RESET}"
-sleep 4
+# ── 8. Git check (informational only) ─────────────────────────────────────────
+GIT_STATUS=""
+if command -v git &>/dev/null; then
+  GIT_STATUS="✓ Available  (updates: re-run install.sh)"
+else
+  GIT_STATUS="✗ Not installed  (updates: re-run install.sh)"
+fi
 
-# Grab the pairing code from journal
-CODE=$(journalctl -u "$SERVICE_NAME" --no-pager -n 50 2>/dev/null \
-  | grep -oE 'Pairing code:[[:space:]]+[A-Z0-9]{6}' \
-  | tail -1 \
-  | grep -oE '[A-Z0-9]{6}' || true)
+# ── 9. Collect stats for banner ──────────────────────────────────────────────
+step "Collecting system info"
+sleep 5  # let the service initialize state
+
+CPU_COUNT=$(nproc 2>/dev/null || grep -c processor /proc/cpuinfo 2>/dev/null || echo "?")
+RAM_GB=$(awk '/MemTotal/{printf "%.2f GB", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo "? GB")
+DISK_FREE=$(df -h "$INSTALL_DIR" 2>/dev/null | awk 'NR==2{print $4}' || echo "?")
+GPU_INFO=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "No GPU detected")
+
+BRAIN="${OLLAMA_MODELS[0]:-no model installed}"
+OLLAMA_STR="● Running  •  ${#OLLAMA_MODELS[@]} model(s)"
+[[ "$OLLAMA_RUNNING" == false ]] && OLLAMA_STR="○ Not running"
 
 NODE_ADDR="${TS_IP:+${TS_IP}:${NODE_PORT}}"
 NODE_ADDR="${NODE_ADDR:-localhost:${NODE_PORT}}"
 
-echo ""
-echo -e "╔══════════════════════════════════════════════════╗"
-if [[ -n "$CODE" ]]; then
-  printf "║  Pairing code:  %-33s║\n" "$CODE"
-else
-  printf "║  Pairing code:  %-33s║\n" "(check: journalctl -u spinny-local -f)"
+# Read pairing code from state
+STATE_FILE="$STATE_DIR/state.json"
+PAIRING_CODE=""
+if [[ -f "$STATE_FILE" ]]; then
+  PAIRING_CODE=$(grep -oP '(?<="pairingCode":")[A-Z0-9]+' "$STATE_FILE" 2>/dev/null || true)
 fi
-printf   "║  Node address:  %-33s║\n" "$NODE_ADDR"
-echo -e  "╠══════════════════════════════════════════════════╣"
-echo -e  "║  In Spinny → Settings → Local Node:             ║"
-echo -e  "║    1. Enter node address (if not localhost)      ║"
-echo -e  "║    2. Enter pairing code                         ║"
-echo -e  "╚══════════════════════════════════════════════════╝"
+[[ -z "$PAIRING_CODE" ]] && PAIRING_CODE="(check: journalctl -u spinny-local -f)"
+
+# Service status
+SVC_OK=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || echo "inactive")
+[[ "$SVC_OK" == "active" ]] && STATUS_STR="● All services running" || STATUS_STR="✗ Service not running — check: journalctl -u spinny-local"
+
+# Node version from package.json
+NODE_VER=$(node -p "require('$INSTALL_DIR/package.json').version" 2>/dev/null || echo "?")
+
+# ── 10. Print rainbow banner ─────────────────────────────────────────────────
+clear
+
+LOGO=(
+'    /$$$$$$  /$$$$$$$  /$$$$$$ /$$   /$$ /$$   /$$ /$$     /$$'
+'   /$$__  $$| $$__  $$|_  $$_/| $$$ | $$| $$$ | $$|  $$   $$/ '
+'  | $$  \__/| $$  \ $$  | $$  | $$$$| $$| $$$$| $$ \  $$ /$$/ '
+'  |  $$$$$$ | $$$$$$$/  | $$  | $$ $$ $$| $$ $$ $$  \  $$$$/ '
+'   \____  $$| $$____/   | $$  | $$  $$$$| $$  $$$$   \  $$/ '
+'   /$$  \ $$| $$        | $$  | $$\  $$$| $$\  $$$    | $$   '
+'  |  $$$$$$/| $$       /$$$$$$| $$ \  $$| $$ \  $$    | $$   '
+'   \______/ |__/      |______/|__/  \__/|__/  \__/    |__/  '
+)
+
+LINE='===================================================================='
+
 echo ""
-echo -e "To follow live logs:  ${BOLD}journalctl -u spinny-local -f${RESET}"
-echo -e "To check status:      ${BOLD}systemctl status spinny-local${RESET}"
+echo -e "${Y}${B}  ↓  ↓  ↓  ↓  ↓  ↓  ↓   IMPORTANT — COPY & STORE   ↓  ↓  ↓  ↓  ↓  ↓  ↓${RST}"
+echo -e "${DIM}${LINE}${RST}"
+
+for i in "${!LOGO[@]}"; do
+  print_rainbow "${LOGO[$i]}" $((i * 38))
+done
+
+echo -e "${DIM}${LINE}${RST}"
+echo -e "  🚀  ${B}SPINNY LOCAL NODE  v${NODE_VER}  SUCCESSFULLY INSTALLED${RST}  🚀"
+echo -e "${DIM}--------------------------------------------------------------------${RST}"
+echo ""
+printf "  %-18s: %s vCPUs  •  %s  •  %s  •  %s free\n" "Hardware" "$CPU_COUNT" "$RAM_GB" "$GPU_INFO" "$DISK_FREE"
+printf "  %-18s: %s\n" "Ollama" "$OLLAMA_STR"
+printf "  %-18s: %s\n" "Brain" "$BRAIN"
+printf "  %-18s: %s\n" "Status" "$STATUS_STR"
+echo ""
+if [[ -n "$TS_IP" ]]; then
+  printf "  %-18s: http://%s\n" "Node UI" "${TS_IP}:${NODE_PORT}"
+fi
+printf "  %-18s: http://localhost:%s\n" "Local" "$NODE_PORT"
+echo ""
+printf "  %-18s: %s\n" "Pairing code" "$PAIRING_CODE"
+echo -e "                       ${DIM}Enter this in Spinny → Settings → Local Node${RST}"
+echo ""
+printf "  %-18s: " "Dashboard token"
+echo -e "${Y}${B}${DASH_TOKEN}${RST}"
+echo -e "                       ${DIM}${ENV_FILE}${RST}"
+echo ""
+printf "  %-18s: %s\n" "Git" "$GIT_STATUS"
+echo ""
+echo -e "${DIM}--------------------------------------------------------------------${RST}"
+echo -e "  Node is ready. Open ${B}spinny.au${RST} and enter your pairing code."
+echo -e "${DIM}${LINE}${RST}"
 echo ""

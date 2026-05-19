@@ -58,6 +58,52 @@ function isTrustedOrigin(req) {
 
 const PORT = 47821
 const UI_DIST = join(import.meta.dirname, '..', 'ui', 'dist')
+const DASHBOARD_TOKEN = process.env.SPINNY_DASHBOARD_TOKEN || null
+
+function parseCookies(header) {
+  const out = {}
+  if (!header) return out
+  for (const part of header.split(';')) {
+    const [k, ...v] = part.trim().split('=')
+    if (k) out[k.trim()] = decodeURIComponent(v.join('=').trim())
+  }
+  return out
+}
+
+function isDashboardAuthed(req) {
+  if (!DASHBOARD_TOKEN) return true
+  const cookies = parseCookies(req.headers.cookie)
+  return cookies['spinny_dash'] === DASHBOARD_TOKEN
+}
+
+const LOGIN_PAGE = (err = '') => `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Spinny — Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .card{background:#111;border:1px solid #222;border-radius:12px;padding:36px 40px;width:100%;max-width:380px}
+  h1{font-size:20px;font-weight:700;margin-bottom:6px;letter-spacing:-.01em}
+  p{font-size:13px;color:#666;margin-bottom:24px}
+  label{display:block;font-size:12px;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em}
+  input{width:100%;background:#0a0a0a;border:1px solid #2a2a2a;color:#e0e0e0;border-radius:7px;padding:10px 14px;font-size:14px;font-family:monospace;outline:none;transition:border .15s}
+  input:focus{border-color:#7c5cfc}
+  button{width:100%;margin-top:14px;background:#7c5cfc;color:#fff;border:none;border-radius:7px;padding:11px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .15s}
+  button:hover{opacity:.85}
+  .err{color:#fc5c5c;font-size:13px;margin-top:12px}
+  .logo{font-size:11px;font-family:monospace;color:#444;margin-bottom:20px;letter-spacing:.08em}
+</style></head>
+<body><div class="card">
+  <div class="logo">SPINNY · LOCAL NODE</div>
+  <h1>Dashboard access</h1>
+  <p>Enter your dashboard token to continue.</p>
+  <form method="POST" action="/api/dashboard-login">
+    <label for="t">Token</label>
+    <input id="t" name="token" type="password" autofocus placeholder="••••••••••••••••" autocomplete="current-password">
+    <button type="submit">Unlock</button>
+    ${err ? `<div class="err">${err}</div>` : ''}
+  </form>
+</div></body></html>`
 
 const MIME = {
   '.html': 'text/html',
@@ -760,8 +806,29 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       } catch (err) { return json(res, { error: err.message, models: [] }, 502, corsSpinnyReq) }
     }
 
-    // Serve React app static files
+    // Dashboard token login
+    if (url.pathname === '/api/dashboard-login' && req.method === 'POST') {
+      const body = await readBody(req)
+      const params = new URLSearchParams(body)
+      const token = params.get('token') || ''
+      if (DASHBOARD_TOKEN && token !== DASHBOARD_TOKEN) {
+        res.writeHead(200, { 'Content-Type': 'text/html' })
+        return res.end(LOGIN_PAGE('Invalid token — try again'))
+      }
+      const maxAge = 60 * 60 * 24 * 30 // 30 days
+      res.writeHead(302, {
+        'Set-Cookie': `spinny_dash=${DASHBOARD_TOKEN || ''}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+        'Location': '/'
+      })
+      return res.end()
+    }
+
+    // Serve React app static files — require dashboard token if set
     if (req.method === 'GET') {
+      if (DASHBOARD_TOKEN && !isDashboardAuthed(req) && !url.pathname.startsWith('/api/')) {
+        res.writeHead(200, { 'Content-Type': 'text/html' })
+        return res.end(LOGIN_PAGE())
+      }
       const pathname = url.pathname === '/' ? '/index.html' : url.pathname
       const filePath = join(UI_DIST, pathname)
       return serveStatic(res, filePath)
