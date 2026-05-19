@@ -27,11 +27,7 @@ $g      = [System.Drawing.Graphics]::FromImage($dst)
 $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
 $g.DrawImage($src, 0, 0, $size.Width, $size.Height)
 $g.Dispose(); $src.Dispose()
-$hIcon  = $dst.GetHicon()
-$icon   = [System.Drawing.Icon]::FromHandle($hIcon)
-$notify.Icon = $icon.Clone()
-$icon.Dispose()
-[System.Runtime.InteropServices.Marshal]::DestroyIcon($hIcon)
+$notify.Icon = [System.Drawing.Icon]::FromHandle($dst.GetHicon())
 $dst.Dispose()
 $notify.Text = "Spinny Local"
 $notify.Visible = $true
