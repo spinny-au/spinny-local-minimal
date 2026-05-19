@@ -90,7 +90,10 @@ step "Configuring firewall"
 if command -v ufw &>/dev/null; then
   if sudo ufw status 2>/dev/null | grep -q "Status: active"; then
     sudo ufw allow "$NODE_PORT/tcp" > /dev/null
-    ok "UFW: port $NODE_PORT open"
+    # Also allow on the Tailscale interface specifically — generic rules don't
+    # always catch traffic arriving on tailscale0 on some Ubuntu versions
+    sudo ufw allow in on tailscale0 to any port "$NODE_PORT" 2>/dev/null || true
+    ok "UFW: port $NODE_PORT open (all interfaces + tailscale0)"
   else
     ok "UFW inactive — skipping"
   fi
@@ -212,15 +215,25 @@ ok "Service started"
 # ── 9. Wait for state + collect info ──────────────────────────────────────────
 step "Collecting system info"
 
-# Retry up to 15s for the pairing code to appear in state.json
+# Retry up to 30s for the pairing code to appear in state.json
 STATE_FILE="$STATE_DIR/state.json"
 PAIRING_CODE=""
-for i in $(seq 1 15); do
+for i in $(seq 1 30); do
   sleep 1
   PAIRING_CODE=$(grep -oP '(?<="pairingCode":")[A-Z0-9]+' "$STATE_FILE" 2>/dev/null || true)
   [[ -n "$PAIRING_CODE" ]] && break
 done
+
+# Fallback: read pairing code directly from journal (service prints it on startup)
+if [[ -z "$PAIRING_CODE" ]]; then
+  PAIRING_CODE=$(journalctl -u "$SERVICE_NAME" --no-pager -n 50 2>/dev/null \
+    | grep -oP 'Pairing code:\s+\K[A-Z0-9]+' | tail -1 || true)
+fi
 [[ -z "$PAIRING_CODE" ]] && PAIRING_CODE="run: journalctl -u spinny-local -f"
+
+# Pull QR URL from journal
+QR_URL=$(journalctl -u "$SERVICE_NAME" --no-pager -n 50 2>/dev/null \
+  | grep -oP 'QR URL: \K\S+' | tail -1 || true)
 
 CPU_COUNT=$(nproc 2>/dev/null || echo "?")
 RAM_GB=$(awk '/MemTotal/{printf "%.2f GB", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo "?")
@@ -288,6 +301,7 @@ printf "  %-18s: %s\n" "Local"    "http://localhost:${NODE_PORT}"
 echo ""
 printf "  %-18s: %s\n" "Pairing code" "$PAIRING_CODE"
 echo -e "                       ${DIM}Enter this in Spinny → Settings → Local Node${RST}"
+[[ -n "$QR_URL" ]] && echo -e "                       ${DIM}${QR_URL}${RST}"
 echo ""
 printf "  %-18s: " "Dashboard token"
 echo -e "${Y}${B}${DASH_TOKEN}${RST}"
