@@ -56,7 +56,7 @@ if node --version 2>/dev/null | grep -qE '^v2[2-9]'; then
 else
   step "Installing Node.js 22"
   need_sudo
-  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - -q
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
   sudo apt-get install -y nodejs 2>&1 | tail -3
   ok "Node.js $(node --version) installed"
 fi
