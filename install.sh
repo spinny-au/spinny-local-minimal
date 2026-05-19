@@ -25,17 +25,14 @@ need_sudo() {
   sudo -v
 }
 
-# ── Rainbow print (16-colour, works in all SSH terminals) ─────────────────────
-# Cycles bold red → yellow → green → cyan → blue → magenta across each line,
-# shifting the starting colour per line for a diagonal wave effect.
-_RAINBOW_COLS=(31 33 32 36 34 35)
+# ── Rainbow print ─────────────────────────────────────────────────────────────
+# Colour each logo line with a different bold ANSI colour (cycles 6 colours).
+# Uses \033 + echo -e — works in every SSH terminal, no issues with $ chars.
 print_rainbow() {
-  local line="$1" offset="${2:-0}" len=${#line}
-  for ((i=0; i<len; i++)); do
-    local col=${_RAINBOW_COLS[$(( (i + offset) % 6 ))]}
-    printf "\e[1;%dm%s" "$col" "${line:$i:1}"
-  done
-  printf "\e[0m\n"
+  local line="$1" idx="${2:-0}"
+  local cols=(31 33 32 36 34 35)
+  local col=${cols[$((idx % 6))]}
+  echo -e "\033[1;${col}m${line}\033[0m"
 }
 
 # ── 1. Node.js 22 ─────────────────────────────────────────────────────────────
