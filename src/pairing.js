@@ -1,5 +1,16 @@
+import { execSync } from "node:child_process";
 import { ensureNodeIdentity, signJson } from "./identity.js";
 import { loadState, saveState } from "./state.js";
+
+function gitFingerprint() {
+  try {
+    const remote = execSync('git remote get-url origin', { encoding: 'utf8', timeout: 3000 }).trim()
+    const commit = execSync('git rev-parse HEAD', { encoding: 'utf8', timeout: 3000 }).trim()
+    return { gitRemote: remote, gitCommit: commit }
+  } catch {
+    return { gitRemote: null, gitCommit: null }
+  }
+}
 
 export async function pairNodeDirect({ accountEmail, controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au" }) {
   if (!accountEmail) throw new Error("accountEmail is required");
@@ -7,10 +18,12 @@ export async function pairNodeDirect({ accountEmail, controlUrl = process.env.SP
   const state = saveState(loadState());
   const payload = {
     nodeId: state.nodeId,
+    nodeName: state.nodeName || null,
     nodePublicKey: identity.publicKeyDer,
     accountEmail,
     client: "spinny-local-minimal",
-    version: "0.1.0"
+    version: "0.1.0",
+    ...gitFingerprint(),
   };
   const signature = signJson(identity.privateKey, payload);
 
@@ -43,10 +56,12 @@ export async function pairNode({ token, controlUrl = process.env.SPINNY_CONTROL_
   const state = saveState(loadState());
   const payload = {
     nodeId: state.nodeId,
+    nodeName: state.nodeName || null,
     nodePublicKey: identity.publicKeyDer,
     pairingToken: token,
     client: "spinny-local-minimal",
-    version: "0.1.0"
+    version: "0.1.0",
+    ...gitFingerprint(),
   };
   const signature = signJson(identity.privateKey, payload);
 

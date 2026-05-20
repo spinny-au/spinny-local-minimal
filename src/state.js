@@ -3,8 +3,20 @@ import { createHash, randomBytes } from "node:crypto";
 import { statePath } from "./paths.js";
 import { ensureNodeIdentity } from "./identity.js";
 
+const NODE_ADJECTIVES = [
+  'aurora','falcon','nova','echo','titan','sage','drift','flare','crest','pulse',
+  'haven','solar','ember','frost','prism','ridge','stone','swift','vapor','zenith',
+]
+
+function generateNodeName() {
+  const adj = NODE_ADJECTIVES[Math.floor(Math.random() * NODE_ADJECTIVES.length)]
+  const suffix = randomBytes(2).toString('hex')
+  return `spinny-${adj}-${suffix}`
+}
+
 const DEFAULT_STATE = {
   nodeId: null,
+  nodeName: null,
   paired: false,
   accountId: null,
   pairingCode: null,
@@ -43,6 +55,9 @@ export function saveState(state) {
   if (!next.nodeId) {
     const { publicKeyDer } = ensureNodeIdentity();
     next.nodeId = `node_${createHash("sha256").update(publicKeyDer).digest("hex").slice(0, 32)}`;
+  }
+  if (!next.nodeName) {
+    next.nodeName = generateNodeName();
   }
   if (!next.createdAt) {
     next.createdAt = next.updatedAt;
