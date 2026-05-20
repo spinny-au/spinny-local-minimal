@@ -46,7 +46,7 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
 
   if (task.type === "vault.put") {
     const { namespace, key, value } = task.params || {};
-    if (!["context_fabric", "memory", "wiki"].includes(namespace)) throw new Error("Unsupported vault namespace");
+    if (!isSupportedVaultNamespace(namespace)) throw new Error("Unsupported vault namespace");
     if (!key) throw new Error("vault.put missing params.key");
     const vault = new Vault();
     try {
@@ -61,7 +61,7 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
 
   if (task.type === "vault.list") {
     const { namespace, limit } = task.params || {};
-    if (!["context_fabric", "memory", "wiki"].includes(namespace)) throw new Error("Unsupported vault namespace");
+    if (!isSupportedVaultNamespace(namespace)) throw new Error("Unsupported vault namespace");
     const vault = new Vault();
     try {
       const result = vault.list(namespace, limit || 20);
@@ -70,6 +70,24 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
     } finally {
       vault.close();
     }
+  }
+
+  if (task.type === "vertical.attach") {
+    const result = attachVertical(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "vertical.detach") {
+    const result = detachVertical(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "vertical.status") {
+    const result = verticalStatus(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
   }
 
   if (task.type === "node.system_info") {
@@ -86,4 +104,90 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
   }
 
   throw new Error(`Unsupported task type: ${task.type}`);
+}
+
+function isSupportedVaultNamespace(namespace) {
+  return ["context_fabric", "memory", "wiki", "verticals", "email_vertical"].includes(namespace);
+}
+
+function attachVertical(params) {
+  const manifest = params.manifest;
+  const name = manifest?.name || params.name;
+  if (!isValidVerticalName(name)) throw new Error("vertical.attach missing valid manifest.name");
+  const vault = new Vault();
+  try {
+    const existing = vault.get("verticals", name) || {};
+    const record = {
+      ...existing,
+      name,
+      version: manifest?.version || params.version || "",
+      manifest: manifest || existing.manifest || null,
+      status: "attached",
+      attachedAt: existing.attachedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      dataLocality: {
+        emailContentLeavesNode: false,
+        credentialsStoredInLocalVault: true,
+        cloudReceivesEncryptedSummariesOnly: true
+      }
+    };
+    vault.put("verticals", name, record);
+    return publicVerticalRecord(record);
+  } finally {
+    vault.close();
+  }
+}
+
+function detachVertical(params) {
+  const name = params.name || params.verticalName;
+  if (!isValidVerticalName(name)) throw new Error("vertical.detach missing valid name");
+  const vault = new Vault();
+  try {
+    const existing = vault.get("verticals", name) || { name };
+    const record = {
+      ...existing,
+      status: "detached",
+      detachedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    vault.put("verticals", name, record);
+    return publicVerticalRecord(record);
+  } finally {
+    vault.close();
+  }
+}
+
+function verticalStatus(params) {
+  const name = params.name || params.verticalName || "";
+  const vault = new Vault();
+  try {
+    if (name) {
+      if (!isValidVerticalName(name)) throw new Error("vertical.status invalid name");
+      const record = vault.get("verticals", name);
+      return { vertical: record ? publicVerticalRecord(record) : null };
+    }
+    return {
+      verticals: vault.list("verticals", 100).map(({ value }) => publicVerticalRecord(value))
+    };
+  } finally {
+    vault.close();
+  }
+}
+
+function publicVerticalRecord(record) {
+  if (!record) return null;
+  return {
+    name: record.name,
+    version: record.version || "",
+    status: record.status || "unknown",
+    attachedAt: record.attachedAt || null,
+    updatedAt: record.updatedAt || null,
+    detachedAt: record.detachedAt || null,
+    capabilities: record.manifest?.capabilities || [],
+    dataLocality: record.dataLocality || null
+  };
+}
+
+function isValidVerticalName(value) {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(value);
 }

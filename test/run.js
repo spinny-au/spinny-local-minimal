@@ -64,6 +64,41 @@ test("model install is only handled for paired node addressed tasks", async () =
   assert.equal(messages.at(-1).type, "task.result");
 });
 
+test("vertical attach persists only local public status in encrypted vault", async () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-vertical-test-"));
+  const state = saveState({ paired: true, accountId: "acct_1" });
+  const messages = [];
+  const result = await handleTask({
+    type: "vertical.attach",
+    taskId: "task_vertical_1",
+    nodeId: state.nodeId,
+    issuedAt: new Date().toISOString(),
+    params: {
+      manifest: {
+        name: "email-automation",
+        version: "1.0.0",
+        capabilities: [{ name: "read-emails", requires_oauth: true, oauth_provider: "gmail" }]
+      }
+    }
+  }, {
+    send: (message) => messages.push(message)
+  });
+
+  assert.equal(result.name, "email-automation");
+  assert.equal(result.status, "attached");
+  assert.equal(result.dataLocality.emailContentLeavesNode, false);
+  assert.equal(messages.at(-1).type, "task.result");
+
+  const vault = new Vault();
+  try {
+    const stored = vault.get("verticals", "email-automation");
+    assert.equal(stored.status, "attached");
+    assert.equal(stored.manifest.name, "email-automation");
+  } finally {
+    vault.close();
+  }
+});
+
 test("rejects tasks addressed to a different node", async () => {
   process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-reject-test-"));
   saveState({ paired: true, accountId: "acct_1" });
@@ -310,6 +345,7 @@ function signedInstruction(privateKey, overrides = {}) {
     issued_at: overrides.issued_at || new Date(now).toISOString(),
     expires_at: overrides.expires_at || new Date(now + 60_000).toISOString(),
     op: overrides.op || "vault.read_preview",
+    user_id: overrides.user_id || null,
     policy: overrides.policy || {
       allow_raw_text_return: false,
       max_snippet_chars: 800,
