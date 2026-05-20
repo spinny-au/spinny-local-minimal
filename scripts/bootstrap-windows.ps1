@@ -166,15 +166,33 @@ $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -MultipleInstances IgnoreNew
 
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false -EA SilentlyContinue
-Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger $trigger `
-    -Settings $settings -RunLevel Highest -Force | Out-Null
-ok "Task '$TASK_NAME' registered — starts automatically at login"
+$taskRegistered = $false
+try {
+    Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger $trigger `
+        -Settings $settings -Principal $principal -Force -EA Stop | Out-Null
+    $taskRegistered = $true
+    ok "Task '$TASK_NAME' registered — starts automatically at login"
+} catch {
+    warn "Task Scheduler registration failed (run as Admin for auto-start). Starting node directly instead."
+}
 
 # ── 10. Start now ─────────────────────────────────────────────────────────────
 step 'Starting node'
-Start-ScheduledTask -TaskName $TASK_NAME
-ok 'Node started in background'
+if ($taskRegistered) {
+    try {
+        Start-ScheduledTask -TaskName $TASK_NAME -EA Stop
+        ok 'Node started via Task Scheduler'
+    } catch {
+        warn 'Task start failed — launching directly'
+        Start-Process 'powershell.exe' -ArgumentList "-WindowStyle Hidden -NonInteractive -NoProfile -Command `"$psCmd`"" -WorkingDirectory $INSTALL_DIR
+        ok 'Node started in background'
+    }
+} else {
+    Start-Process 'powershell.exe' -ArgumentList "-WindowStyle Hidden -NonInteractive -NoProfile -Command `"$psCmd`"" -WorkingDirectory $INSTALL_DIR
+    ok 'Node started in background (no auto-start — re-run as Admin for that)'
+}
 
 # ── 11. Wait for pairing code ─────────────────────────────────────────────────
 step 'Waiting for node to initialise'
