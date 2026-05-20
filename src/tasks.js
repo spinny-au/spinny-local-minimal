@@ -8,17 +8,21 @@ import { getLines } from "./log-buffer.js";
 import {
   captureFeedback,
   completeGmailOAuth,
+  deleteGmailCredentials,
   emailMetrics,
   emailStatus,
   executeEmailAction,
   configureTelegram,
   feedbackInsights,
+  getGmailCredentials,
   initGmailOAuth,
   monitorEmails,
   pauseEmailAutomation,
   planEmailAutomation,
   resumeEmailAutomation,
-  sendTelegramNotification
+  saveGmailCredentials,
+  sendTelegramNotification,
+  storeGmailTokens
 } from "./email-vertical.js";
 import {
   deploySubagent,
@@ -132,6 +136,30 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
 
   if (task.type === "email.resume") {
     const result = resumeEmailAutomation();
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.oauth.tokens") {
+    const result = storeGmailTokens(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.credentials.save") {
+    const result = saveGmailCredentials(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.credentials.get") {
+    const result = getGmailCredentials();
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.credentials.delete") {
+    const result = deleteGmailCredentials();
     await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
     return result;
   }

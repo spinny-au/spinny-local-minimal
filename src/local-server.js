@@ -17,17 +17,20 @@ import {
   captureFeedback,
   completeGmailOAuth,
   configureTelegram,
+  deleteGmailCredentials,
   emailMetrics,
   emailStatus,
   executeEmailAction,
   feedbackInsights,
   formatTelegramNotification,
+  getGmailCredentials,
   handleTelegramWebhook,
   initGmailOAuth,
   monitorEmails,
   pauseEmailAutomation,
   planEmailAutomation,
   resumeEmailAutomation,
+  saveGmailCredentials,
   sendTelegramNotification
 } from './email-vertical.js'
 import {
@@ -297,6 +300,25 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       }
     }
 
+    if (url.pathname === '/api/email/credentials' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, saveGmailCredentials(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/credentials' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      return json(res, getGmailCredentials(), 200, corsSpinnyReq)
+    }
+
+    if (url.pathname === '/api/email/credentials' && req.method === 'DELETE') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      return json(res, deleteGmailCredentials(), 200, corsSpinnyReq)
+    }
+
     if (url.pathname === '/api/email/oauth/init' && req.method === 'POST') {
       if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
       try {
@@ -313,6 +335,23 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       } catch (error) {
         return json(res, { error: error.message }, 400, corsSpinnyReq)
       }
+    }
+
+    // Google OAuth redirect — GET with ?code=&state=&email=
+    if (url.pathname === '/api/email/oauth/callback' && req.method === 'GET') {
+      const code = url.searchParams.get('code')
+      const state = url.searchParams.get('state')
+      const accountEmail = url.searchParams.get('email') || url.searchParams.get('login_hint') || 'gmail-account'
+      const redirectUri = `http://localhost:${PORT}/api/email/oauth/callback`
+      try {
+        await completeGmailOAuth({ code, state, redirectUri, accountEmail })
+        res.writeHead(200, { 'content-type': 'text/html' })
+        res.end('<html><body style="font-family:system-ui;background:#0d0d0d;color:#e0e0e0;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><div style="font-size:48px">✓</div><h2>Gmail connected!</h2><p style="color:#666">You can close this tab and return to Spinny.</p></div></body></html>')
+      } catch (error) {
+        res.writeHead(400, { 'content-type': 'text/html' })
+        res.end(`<html><body style="font-family:system-ui;background:#0d0d0d;color:#e0e0e0;padding:40px"><h2>OAuth failed</h2><pre style="color:#ef4444">${error.message}</pre></body></html>`)
+      }
+      return
     }
 
     if (url.pathname === '/api/email/plan' && req.method === 'POST') {

@@ -44,8 +44,54 @@ export function emailStatus() {
   });
 }
 
+export function storeGmailTokens(params = {}) {
+  const accountEmail = (params.accountEmail || "gmail-account").toLowerCase().trim();
+  return withVault((vault) => {
+    const record = {
+      email: accountEmail,
+      accessToken: params.accessToken,
+      refreshToken: params.refreshToken,
+      tokenType: params.tokenType || "Bearer",
+      scope: params.scope || "",
+      expiresAt: params.expiresIn
+        ? new Date(Date.now() + Number(params.expiresIn) * 1000).toISOString()
+        : null,
+      connectedAt: now(),
+      source: "spinny-oauth",
+    };
+    vault.put(`${NS}:gmail`, accountEmail, record);
+    audit(vault, "gmail.oauth.stored", { accountEmail });
+    return { ok: true, accountEmail, dataLocality: locality() };
+  });
+}
+
+export function saveGmailCredentials(params = {}) {
+  const clientId = stringParam(params.clientId, "clientId");
+  const clientSecret = stringParam(params.clientSecret, "clientSecret");
+  return withVault((vault) => {
+    vault.put(NS, "gmail_credentials", { clientId, clientSecret, savedAt: now() });
+    return { ok: true, saved: true, clientIdPrefix: clientId.slice(0, 12) + "…" };
+  });
+}
+
+export function getGmailCredentials() {
+  return withVault((vault) => {
+    const creds = vault.get(NS, "gmail_credentials");
+    if (!creds) return { configured: false };
+    return { configured: true, clientIdPrefix: (creds.clientId || "").slice(0, 12) + "…", savedAt: creds.savedAt };
+  });
+}
+
+export function deleteGmailCredentials() {
+  return withVault((vault) => {
+    vault.db.prepare("DELETE FROM encrypted_items WHERE namespace = ? AND item_key = ?").run(NS, "gmail_credentials");
+    return { ok: true, deleted: true };
+  });
+}
+
 export function initGmailOAuth(params = {}) {
-  const clientId = stringParam(params.clientId || process.env.GMAIL_CLIENT_ID, "clientId");
+  const stored = withVault((vault) => vault.get(NS, "gmail_credentials"));
+  const clientId = stringParam(params.clientId || stored?.clientId || process.env.GMAIL_CLIENT_ID, "clientId");
   const redirectUri = stringParam(params.redirectUri, "redirectUri");
   const state = randomUUID();
   const scope = [
@@ -74,8 +120,9 @@ export function initGmailOAuth(params = {}) {
 export async function completeGmailOAuth(params = {}, deps = {}) {
   const code = stringParam(params.code, "code");
   const state = stringParam(params.state, "state");
-  const clientId = stringParam(params.clientId || process.env.GMAIL_CLIENT_ID, "clientId");
-  const clientSecret = stringParam(params.clientSecret || process.env.GMAIL_CLIENT_SECRET, "clientSecret");
+  const stored = withVault((vault) => vault.get(NS, "gmail_credentials"));
+  const clientId = stringParam(params.clientId || stored?.clientId || process.env.GMAIL_CLIENT_ID, "clientId");
+  const clientSecret = stringParam(params.clientSecret || stored?.clientSecret || process.env.GMAIL_CLIENT_SECRET, "clientSecret");
   const redirectUri = stringParam(params.redirectUri, "redirectUri");
   const accountEmail = (params.email || params.accountEmail || "gmail-account").toLowerCase().trim();
 
