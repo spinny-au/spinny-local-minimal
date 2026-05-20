@@ -71,7 +71,7 @@ try {
       // Keep same code across restarts so systemd restarts don't change it mid-pairing
       if (!state.pairingCode) state = saveState({ ...state, pairingCode: generatePairingCode() });
       const code = state.pairingCode;
-      const controlUrl = process.env.SPINNY_CONTROL_URL || "https://www.spinny.au";
+      const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
       const pairingUrl = `${controlUrl}/?localcode=${code}`;
 
       // Detect Tailscale IP for remote-node users
