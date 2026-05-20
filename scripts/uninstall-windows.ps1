@@ -49,10 +49,15 @@ if ($task) {
     warn "Scheduled task not found — may have been removed already"
 }
 
-# 2. Kill any stray node processes running from the install dir
+# 2. Kill node processes and the tray helper (powershell.exe running tray-windows.ps1)
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" -EA SilentlyContinue |
     Where-Object { $_.CommandLine -like "*SpinnyLocalMinimal*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -EA SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*tray-windows.ps1*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+Start-Sleep 1
 
 # 3. Remove app directory
 step "Removing app files"
