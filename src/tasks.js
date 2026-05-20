@@ -20,6 +20,13 @@ import {
   resumeEmailAutomation,
   sendTelegramNotification
 } from "./email-vertical.js";
+import {
+  deploySubagent,
+  listSubagents,
+  pauseSubagent,
+  resumeSubagent,
+  removeSubagent,
+} from './subagent-scheduler.js'
 
 export async function handleTask(task, { send, ollama = new OllamaClient() } = {}) {
   const state = loadState();
@@ -171,6 +178,36 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
     return result;
   }
 
+  if (task.type === "vertical.subagent.deploy") {
+    const result = deploySubagent(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "vertical.subagent.list") {
+    const result = listSubagents();
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "vertical.subagent.pause") {
+    const result = pauseSubagent(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "vertical.subagent.resume") {
+    const result = resumeSubagent(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "vertical.subagent.remove") {
+    const result = removeSubagent(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
   if (task.type === "email.telegram.configure") {
     const result = configureTelegram(task.params || {});
     await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
@@ -200,7 +237,7 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
 }
 
 function isSupportedVaultNamespace(namespace) {
-  return ["context_fabric", "memory", "wiki", "verticals", "email_vertical"].includes(namespace);
+  return ["context_fabric", "memory", "wiki", "verticals", "email_vertical", "subagents"].includes(namespace);
 }
 
 function attachVertical(params) {

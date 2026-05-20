@@ -10,6 +10,7 @@ import { RelayClient } from "./relay.js";
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
 import { startLocalServer } from "./local-server.js";
+import { startSubagentScheduler } from "./subagent-scheduler.js";
 import { startTray } from "./tray.js";
 
 const command = process.argv[2] || "start";
@@ -66,6 +67,10 @@ try {
         pairingResolver?.(result);
       }
     });
+
+    // Start autonomous sub-agent scheduler
+    const { monitorEmails, executeEmailAction, sendTelegramNotification, formatTelegramNotification } = await import('./email-vertical.js')
+    startSubagentScheduler({ monitorEmails, executeEmailAction, sendTelegramNotification, formatTelegramNotification })
 
     if (!state.paired) {
       // Keep same code across restarts so systemd restarts don't change it mid-pairing
