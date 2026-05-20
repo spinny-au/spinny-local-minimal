@@ -9,6 +9,19 @@ import { saveState } from "../src/state.js";
 import { handleTask } from "../src/tasks.js";
 import { RelayClient } from "../src/relay.js";
 import {
+  captureFeedback,
+  classifyEmail,
+  configureTelegram,
+  emailMetrics,
+  executeEmailAction,
+  formatTelegramNotification,
+  monitorEmails,
+  pauseEmailAutomation,
+  planEmailAutomation,
+  resumeEmailAutomation,
+  sendTelegramNotification
+} from "../src/email-vertical.js";
+import {
   executeInstruction,
   memoryStats,
   prepareInstruction,
@@ -97,6 +110,131 @@ test("vertical attach persists only local public status in encrypted vault", asy
   } finally {
     vault.close();
   }
+});
+
+test("email classifier separates marketing, important, reply-needed, and spam", () => {
+  assert.equal(classifyEmail({ subject: "Weekly newsletter", body: "unsubscribe here" }).category, "marketing");
+  assert.equal(classifyEmail({ subject: "Urgent project update" }).category, "important");
+  assert.equal(classifyEmail({ from: "boss@company.com", subject: "Need your reply" }).category, "reply-needed");
+  assert.equal(classifyEmail({ subject: "Limited time offer!" }).category, "spam");
+});
+
+test("email plan generation returns approval-first user plan", () => {
+  const result = planEmailAutomation({ accounts: ["work@example.com"], telegram: true });
+  assert.equal(result.plan.approvalRequired, true);
+  assert.match(result.userVisiblePlan, /Approve this plan/);
+  assert.match(result.userVisiblePlan, /work@example.com/);
+});
+
+test("email monitor stores local-only messages and executes approved action", async () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-email-flow-test-"));
+  saveState({ paired: true, accountId: "acct_1" });
+  const monitored = await monitorEmails({
+    messages: [
+      { id: "email_1", from: "client@company.com", subject: "Urgent project update", body: "please reply" },
+      { id: "email_2", from: "promo@example.com", subject: "Limited time offer!", body: "unsubscribe" }
+    ]
+  });
+  assert.equal(monitored.processed, 2);
+  assert.equal(monitored.flagged[0].id, "email_1");
+  assert.equal(monitored.emails[0].dataLocality, undefined);
+  assert.equal(monitored.dataLocality.emailContentLeavesNode, false);
+
+  const action = await executeEmailAction({ emailId: "email_1", action: "archive" });
+  assert.equal(action.ok, true);
+  assert.equal(action.action, "archive");
+});
+
+test("email feedback learns a local whitelist rule", () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-email-feedback-test-"));
+  saveState({ paired: true, accountId: "acct_1" });
+  const result = captureFeedback({
+    emailId: "email_3",
+    rating: "down",
+    correction: "Don't delete from tech-crunch.com"
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.learnedRule.category, "important");
+  assert.equal(classifyEmail({ from: "news@tech-crunch.com", subject: "Newsletter" }, [result.learnedRule]).category, "important");
+});
+
+test("email telegram preview has approval buttons", () => {
+  const preview = formatTelegramNotification({
+    id: "email_1",
+    from: "client@company.com",
+    subject: "Urgent project update",
+    classification: { category: "reply-needed", confidence: 0.9 }
+  });
+  assert.match(preview.text, /client@company.com/);
+  assert.equal(preview.buttons.some((button) => button.action === "draft_reply"), true);
+});
+
+test("email telegram config stores token locally and sends notification", async () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-email-telegram-test-"));
+  saveState({ paired: true, accountId: "acct_1" });
+  const config = configureTelegram({ botToken: "123:test-token", chatId: "999888" });
+  assert.equal(config.connected, true);
+  let sent = null;
+  const result = await sendTelegramNotification({
+    email: {
+      id: "email_tg_1",
+      from: "client@company.com",
+      subject: "Urgent project update",
+      classification: { category: "reply-needed", confidence: 0.9 }
+    }
+  }, {
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+  });
+  assert.equal(result.sent, true);
+  assert.equal(sent.chat_id, "999888");
+  assert.match(sent.text, /Urgent project update/);
+});
+
+test("email safety rate limits and can pause execution", async () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-email-safety-test-"));
+  saveState({ paired: true, accountId: "acct_1" });
+  await executeEmailAction({ emailId: "missing_1", action: "archive", allowMissing: true, rateLimit: 1 });
+  await assert.rejects(() => executeEmailAction({ emailId: "missing_2", action: "archive", allowMissing: true, rateLimit: 1 }), /Rate limit exceeded/);
+
+  pauseEmailAutomation({ reason: "manual test" });
+  await assert.rejects(() => executeEmailAction({ emailId: "missing_3", action: "archive", allowMissing: true }), /paused/);
+  assert.equal(resumeEmailAutomation().ok, true);
+  const status = emailMetrics();
+  assert.equal(status.ok, true);
+});
+
+test("email anomaly policy pauses after too many destructive actions", async () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-email-anomaly-test-"));
+  saveState({ paired: true, accountId: "acct_1" });
+  for (let i = 0; i < 11; i += 1) {
+    await executeEmailAction({ emailId: `missing_delete_${i}`, action: "delete", allowMissing: true });
+  }
+  await assert.rejects(() => executeEmailAction({ emailId: "missing_after_pause", action: "archive", allowMissing: true }), /paused/);
+});
+
+test("email task interface can plan and monitor", async () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-email-task-test-"));
+  const state = saveState({ paired: true, accountId: "acct_1" });
+  const plan = await handleTask({
+    type: "email.plan",
+    taskId: "task_email_plan",
+    nodeId: state.nodeId,
+    issuedAt: new Date().toISOString(),
+    params: { accounts: ["demo@example.com"] }
+  });
+  assert.match(plan.userVisiblePlan, /demo@example.com/);
+
+  const monitored = await handleTask({
+    type: "email.monitor",
+    taskId: "task_email_monitor",
+    nodeId: state.nodeId,
+    issuedAt: new Date().toISOString(),
+    params: { messages: [{ id: "email_task_1", subject: "Urgent hello", from: "a@b.com" }] }
+  });
+  assert.equal(monitored.processed, 1);
 });
 
 test("rejects tasks addressed to a different node", async () => {

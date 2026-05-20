@@ -14,6 +14,21 @@ import { getLines } from './log-buffer.js'
 import { Vault } from './vault.js'
 import { exportModelBundle, importModelBundle, importModelBundleFromUrl, getBundleReadStream } from './model-bundles.js'
 import {
+  captureFeedback,
+  completeGmailOAuth,
+  configureTelegram,
+  emailMetrics,
+  emailStatus,
+  executeEmailAction,
+  formatTelegramNotification,
+  initGmailOAuth,
+  monitorEmails,
+  pauseEmailAutomation,
+  planEmailAutomation,
+  resumeEmailAutomation,
+  sendTelegramNotification
+} from './email-vertical.js'
+import {
   executeInstruction,
   loadPrivacyPolicy,
   memoryStats,
@@ -181,6 +196,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         || p === '/api/cloud-chat'
         || p === '/api/models'
         || p === '/api/instruction'
+        || p.startsWith('/api/email/')
         || p === '/api/memory/stats'
         || p === '/api/privacy'
         || p === '/api/receipts'
@@ -248,6 +264,116 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     if (url.pathname === '/api/memory/stats' && req.method === 'GET') {
       if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
       return json(res, memoryStats(), 200, corsSpinnyReq)
+    }
+
+    if (url.pathname === '/api/email/status' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      return json(res, emailStatus(), 200, corsSpinnyReq)
+    }
+
+    if (url.pathname === '/api/email/metrics' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      return json(res, emailMetrics(), 200, corsSpinnyReq)
+    }
+
+    if (url.pathname === '/api/email/pause' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, pauseEmailAutomation(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/resume' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        await readJsonBody(req).catch(() => ({}))
+        return json(res, resumeEmailAutomation(), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/oauth/init' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, initGmailOAuth(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/oauth/callback' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, await completeGmailOAuth(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/plan' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, planEmailAutomation(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/monitor' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, await monitorEmails(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/action' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, await executeEmailAction(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/feedback' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, captureFeedback(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/telegram/preview' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, formatTelegramNotification(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/telegram/configure' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, configureTelegram(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/telegram/send' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, await sendTelegramNotification(await readJsonBody(req)), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
     }
 
     // ── Multi-account access management ──────────────────────────────────────

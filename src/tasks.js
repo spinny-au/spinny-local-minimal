@@ -5,6 +5,20 @@ import { Vault } from "./vault.js";
 import { importModelBundleFromUrl } from "./model-bundles.js";
 import { getSystemInfo } from "./system-info.js";
 import { getLines } from "./log-buffer.js";
+import {
+  captureFeedback,
+  completeGmailOAuth,
+  emailMetrics,
+  emailStatus,
+  executeEmailAction,
+  configureTelegram,
+  initGmailOAuth,
+  monitorEmails,
+  pauseEmailAutomation,
+  planEmailAutomation,
+  resumeEmailAutomation,
+  sendTelegramNotification
+} from "./email-vertical.js";
 
 export async function handleTask(task, { send, ollama = new OllamaClient() } = {}) {
   const state = loadState();
@@ -86,6 +100,78 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
 
   if (task.type === "vertical.status") {
     const result = verticalStatus(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.status") {
+    const result = emailStatus();
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.metrics") {
+    const result = emailMetrics();
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.pause") {
+    const result = pauseEmailAutomation(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.resume") {
+    const result = resumeEmailAutomation();
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.oauth.init") {
+    const result = initGmailOAuth(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.oauth.callback") {
+    const result = await completeGmailOAuth(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.plan") {
+    const result = planEmailAutomation(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.monitor") {
+    const result = await monitorEmails(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.action") {
+    const result = await executeEmailAction(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.feedback") {
+    const result = captureFeedback(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.telegram.configure") {
+    const result = configureTelegram(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.telegram.send") {
+    const result = await sendTelegramNotification(task.params || {});
     await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
     return result;
   }
