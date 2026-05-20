@@ -12,6 +12,7 @@ import {
   emailStatus,
   executeEmailAction,
   configureTelegram,
+  feedbackInsights,
   initGmailOAuth,
   monitorEmails,
   pauseEmailAutomation,
@@ -160,6 +161,12 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
 
   if (task.type === "email.feedback") {
     const result = captureFeedback(task.params || {});
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "email.feedback.insights") {
+    const result = feedbackInsights();
     await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
     return result;
   }

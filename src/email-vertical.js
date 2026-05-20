@@ -322,6 +322,65 @@ export function captureFeedback(params = {}) {
   });
 }
 
+export function feedbackInsights() {
+  return withVault((vault) => {
+    const feedbackRecords = vault.list(`${NS}:feedback`, 200).map(({ value }) => value)
+    const rules = loadRules(vault)
+    const byRating = {}
+    const corrections = []
+    for (const f of feedbackRecords) {
+      byRating[f.rating] = (byRating[f.rating] || 0) + 1
+      if (f.correction) corrections.push(f.correction)
+    }
+    const learnedRules = rules.filter(r => r.id.startsWith('feedback-'))
+    return {
+      ok: true,
+      totalFeedback: feedbackRecords.length,
+      byRating,
+      learnedRulesCount: learnedRules.length,
+      learnedRules,
+      recentCorrections: corrections.slice(-5),
+      dataLocality: locality(),
+    }
+  })
+}
+
+export async function handleTelegramWebhook(body, deps = {}) {
+  return await withVaultAsync(async (vault) => {
+    const update = typeof body === 'string' ? JSON.parse(body) : body
+    const query = update.callback_query
+    if (!query) return { ok: true, ignored: true }
+    let data
+    try { data = JSON.parse(query.data || '{}') } catch { data = {} }
+    const action = data.a
+    const emailId = data.e
+    if (!action || !emailId) return { ok: true, ignored: true }
+    audit(vault, 'telegram.webhook.received', { action, emailId })
+    let result
+    try {
+      if (action === 'view') {
+        const message = vault.get(`${NS}:messages`, emailId)
+        result = { ok: true, action: 'view', email: message ? { id: message.id, from: message.from, subject: message.subject, preview: message.preview, classification: message.classification } : null }
+      } else {
+        result = await executeEmailAction({ emailId, action, allowMissing: true, simulate: !process.env.GMAIL_CLIENT_ID }, deps)
+      }
+    } catch (err) {
+      result = { ok: false, error: err.message }
+    }
+    const telegram = vault.get(`${NS}:telegram`, 'default')
+    if (telegram && query.id) {
+      const fetchFn = deps.fetch || globalThis.fetch
+      const statusLine = result.ok ? `✓ ${action} complete` : `✗ ${result.error || 'failed'}`
+      await fetchFn(`https://api.telegram.org/bot${telegram.botToken}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: query.id, text: statusLine, show_alert: false }),
+      }).catch(() => {})
+    }
+    return { ok: true, action, emailId, result }
+  })
+}
+
 export function classifyEmail(email, rules = DEFAULT_RULES) {
   const text = {
     sender_contains: (email.from || "").toLowerCase(),
@@ -409,7 +468,7 @@ function emailMetricsFromVault(vault) {
 
 async function fetchGmailMessages(vault, params, deps) {
   const accountEmail = stringParam(params.accountEmail, "accountEmail");
-  const token = vault.get(`${NS}:gmail`, accountEmail);
+  const token = await refreshGmailTokenIfNeeded(vault, accountEmail, deps);
   if (!token) throw new Error("Gmail account is not connected on this local node");
   const fetchFn = deps.fetch || globalThis.fetch;
   const list = await fetchFn(`${GMAIL_API}/users/me/messages?maxResults=${Math.min(Number(params.limit || 10), 25)}`, {
@@ -427,7 +486,7 @@ async function fetchGmailMessages(vault, params, deps) {
 }
 
 async function executeGmailAction(vault, accountEmail, emailId, action, params, deps) {
-  const token = vault.get(`${NS}:gmail`, accountEmail);
+  const token = await refreshGmailTokenIfNeeded(vault, accountEmail, deps);
   if (!token) throw new Error("Gmail account is not connected on this local node");
   const fetchFn = deps.fetch || globalThis.fetch;
   let url = `${GMAIL_API}/users/me/messages/${encodeURIComponent(emailId)}`;
@@ -500,6 +559,31 @@ function previewSecret(value) {
   const text = String(value || "");
   if (text.length <= 4) return "****";
   return `${text.slice(0, 2)}****${text.slice(-2)}`;
+}
+
+async function refreshGmailTokenIfNeeded(vault, accountEmail, deps = {}) {
+  const record = vault.get(`${NS}:gmail`, accountEmail)
+  if (!record) throw new Error(`Gmail account not connected: ${accountEmail}`)
+  if (record.expiresAt) {
+    const expiresMs = new Date(record.expiresAt).getTime()
+    if (Date.now() + 5 * 60 * 1000 < expiresMs) return record
+  }
+  if (!record.refreshToken) return record
+  const clientId = process.env.GMAIL_CLIENT_ID
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET
+  if (!clientId || !clientSecret) return record
+  const fetchFn = deps.fetch || globalThis.fetch
+  const response = await fetchFn(GMAIL_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: record.refreshToken, client_id: clientId, client_secret: clientSecret }),
+  })
+  if (!response.ok) return record
+  const token = await response.json()
+  const updated = { ...record, accessToken: token.access_token, expiresAt: token.expires_in ? new Date(Date.now() + Number(token.expires_in) * 1000).toISOString() : null, updatedAt: now() }
+  vault.put(`${NS}:gmail`, accountEmail, updated)
+  audit(vault, 'gmail.token.refreshed', { accountEmail })
+  return updated
 }
 
 function withVault(fn) {

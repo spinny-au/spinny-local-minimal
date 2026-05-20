@@ -20,7 +20,9 @@ import {
   emailMetrics,
   emailStatus,
   executeEmailAction,
+  feedbackInsights,
   formatTelegramNotification,
+  handleTelegramWebhook,
   initGmailOAuth,
   monitorEmails,
   pauseEmailAutomation,
@@ -374,6 +376,21 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       } catch (error) {
         return json(res, { error: error.message }, 400, corsSpinnyReq)
       }
+    }
+
+    if (url.pathname === '/api/email/telegram/webhook' && req.method === 'POST') {
+      // No origin check — Telegram sends from their servers (no browser origin header)
+      try {
+        const body = await readBody(req)
+        return json(res, await handleTelegramWebhook(body), 200, corsSpinnyReq)
+      } catch (error) {
+        return json(res, { error: error.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/email/feedback/insights' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      return json(res, feedbackInsights(), 200, corsSpinnyReq)
     }
 
     // ── Multi-account access management ──────────────────────────────────────
