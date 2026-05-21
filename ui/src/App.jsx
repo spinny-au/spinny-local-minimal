@@ -986,24 +986,23 @@ function ChatTab({ sysInfo }) {
   )
 }
 
-function UpdateTab({ localVersion, remoteVersion }) {
-  const [status, setStatus] = useState(null)
-  const [updating, setUpdating] = useState(false)
-  const [done, setDone] = useState(false)
+function useStreamedAction(endpoint) {
+  const [phase, setPhase] = useState('idle') // idle | running | success | failed | rolledBack | restarting
+  const [lines, setLines] = useState([])
 
-  async function doUpdate() {
-    setUpdating(true)
-    setStatus('Starting update…')
+  const run = async () => {
+    setPhase('running')
+    setLines([])
     try {
-      const r = await fetch('/api/update/apply', { method: 'POST' })
+      const r = await fetch(endpoint, { method: 'POST' })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const reader = r.body?.getReader()
       if (!reader) throw new Error('No stream')
       const decoder = new TextDecoder()
       let buf = ''
       while (true) {
-        const { done: d, value } = await reader.read()
-        if (d) break
+        const { done, value } = await reader.read()
+        if (done) break
         buf += decoder.decode(value, { stream: true })
         const parts = buf.split('\n\n')
         buf = parts.pop() ?? ''
@@ -1013,38 +1012,139 @@ function UpdateTab({ localVersion, remoteVersion }) {
           try {
             const evt = JSON.parse(line)
             if (evt.done) {
-              setDone(true)
-              setStatus(evt.success ? '✓ Update complete — please restart Spinny Local.' : '✗ Update failed.')
-              setUpdating(false)
+              if (evt.restarting) setPhase('restarting')
+              else if (evt.rolledBack) setPhase('rolledBack')
+              else setPhase(evt.success ? 'success' : 'failed')
             } else if (evt.status) {
-              setStatus(evt.status)
+              setLines(prev => [...prev, evt.status])
             }
-          } catch { /* ignore */ }
+          } catch {}
         }
       }
     } catch (e) {
-      setStatus('Error: ' + e.message)
-      setUpdating(false)
+      setLines(prev => [...prev, 'Error: ' + e.message])
+      setPhase('failed')
     }
   }
+
+  return { phase, lines, run, reset: () => { setPhase('idle'); setLines([]) } }
+}
+
+function ReconnectWatch({ onBack }) {
+  const [secs, setSecs] = useState(0)
+  const [reconnected, setReconnected] = useState(false)
+
+  useEffect(() => {
+    const tick = setInterval(() => setSecs(s => s + 1), 1000)
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch('/api/status')
+        if (r.ok) { setReconnected(true); clearInterval(poll); clearInterval(tick) }
+      } catch {}
+    }, 2000)
+    return () => { clearInterval(tick); clearInterval(poll) }
+  }, [])
+
+  if (reconnected) {
+    return (
+      <div style={{ textAlign: 'center', padding: '32px 0' }}>
+        <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
+        <div style={{ fontSize: 15, color: 'var(--ok)', fontWeight: 600, marginBottom: 16 }}>Node is back online</div>
+        <button className="btn" onClick={onBack}>Back to dashboard</button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ textAlign: 'center', padding: '32px 0' }}>
+      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
+        Waiting for node to restart… ({secs}s)
+      </div>
+      <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+        This page will reconnect automatically. Your pairing is safe.
+      </div>
+    </div>
+  )
+}
+
+function UpdateTab({ updateInfo, onUpdated }) {
+  const update = useStreamedAction('/api/update/apply')
+  const rollback = useStreamedAction('/api/update/rollback')
+
+  const active = update.phase !== 'idle' ? update : rollback.phase !== 'idle' ? rollback : null
+  const restarting = update.phase === 'restarting' || rollback.phase === 'restarting'
+
+  if (restarting) {
+    return (
+      <div className="card">
+        <div className="card-title">Restarting node…</div>
+        <ReconnectWatch onBack={() => { update.reset(); rollback.reset(); onUpdated?.() }} />
+      </div>
+    )
+  }
+
+  const localHash = updateInfo?.localHash
+  const remoteHash = updateInfo?.remoteHash
+  const remoteMessage = updateInfo?.remoteMessage
+  const remoteDate = updateInfo?.remoteDate
 
   return (
     <div className="card">
       <div className="card-title">Update Available</div>
+
       <div className="row">
-        <span className="row-label">Installed</span>
-        <span className="row-value">{localVersion}</span>
+        <span className="row-label">Current</span>
+        <span className="row-value" style={{ fontFamily: 'monospace', fontSize: 12 }}>{localHash || '—'}</span>
       </div>
       <div className="row">
         <span className="row-label">Latest</span>
-        <span className="row-value" style={{ color: 'var(--ok)' }}>{remoteVersion}</span>
+        <div style={{ textAlign: 'right' }}>
+          <div className="row-value" style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--ok)' }}>{remoteHash || '—'}</div>
+          {remoteMessage && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{remoteMessage}</div>}
+          {remoteDate && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{new Date(remoteDate).toLocaleString()}</div>}
+        </div>
       </div>
-      <div style={{ marginTop: 16 }}>
-        <button className="btn" onClick={doUpdate} disabled={updating || done}>
-          {updating ? 'Updating…' : done ? 'Restart to finish' : 'Update Now'}
+
+      <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button
+          className="btn"
+          onClick={update.run}
+          disabled={update.phase === 'running' || update.phase === 'success' || rollback.phase === 'running'}
+        >
+          {update.phase === 'running' ? 'Updating…' : '⬆ Update & Restart'}
         </button>
-        {status && <div className={`msg ${done ? 'ok' : 'ok'}`} style={{ marginTop: 10 }}>{status}</div>}
+        {(update.phase === 'failed' || update.phase === 'rolledBack') && (
+          <button
+            className="btn secondary"
+            onClick={rollback.run}
+            disabled={rollback.phase === 'running'}
+          >
+            {rollback.phase === 'running' ? 'Rolling back…' : '↩ Rollback & Restart'}
+          </button>
+        )}
       </div>
+
+      {active && active.lines.length > 0 && (
+        <div style={{
+          marginTop: 14, background: 'var(--bg)', border: '1px solid var(--bg-border)', borderRadius: 6,
+          padding: '10px 14px', fontFamily: 'monospace', fontSize: 11, lineHeight: 1.7,
+          maxHeight: 200, overflowY: 'auto', color: 'var(--text-muted)'
+        }}>
+          {active.lines.map((l, i) => <div key={i}>{l}</div>)}
+        </div>
+      )}
+
+      {(update.phase === 'rolledBack') && (
+        <div className="msg err" style={{ marginTop: 10 }}>Update failed — automatically rolled back to previous version.</div>
+      )}
+      {(update.phase === 'failed' && update.phase !== 'rolledBack') && (
+        <div className="msg err" style={{ marginTop: 10 }}>Update failed. Use Rollback to restore the previous version.</div>
+      )}
+      {(rollback.phase === 'rolledBack' || rollback.phase === 'failed') && (
+        <div className={`msg ${rollback.phase === 'failed' ? 'err' : 'ok'}`} style={{ marginTop: 10 }}>
+          {rollback.phase === 'failed' ? 'Rollback failed — check logs.' : 'Rolled back.'}
+        </div>
+      )}
     </div>
   )
 }
@@ -1518,7 +1618,7 @@ export function App() {
           {tab === 'Logs'  && <LogsTab />}
           {tab === 'Admin' && <AdminTab />}
           {tab === 'About' && <AboutTab sysInfo={sysInfo} />}
-          {tab === 'Update' && <UpdateTab localVersion={updateInfo?.localVersion} remoteVersion={updateInfo?.remoteVersion} />}
+          {tab === 'Update' && <UpdateTab updateInfo={updateInfo} onUpdated={() => setTab('Status')} />}
         </div>
       </div>
     </>

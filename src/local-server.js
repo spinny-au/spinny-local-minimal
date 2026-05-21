@@ -2,11 +2,48 @@ import { createServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { readFileSync, existsSync } from 'node:fs'
 import { join, extname } from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, execSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 
 const _require = createRequire(import.meta.url)
 const LOCAL_VERSION = (() => { try { return _require('../package.json').version } catch { return '0.0.0' } })()
+
+// ── Update state (module-level, survives the update process until restart) ─────
+const REPO_ROOT = join(import.meta.dirname, '..')
+let _prevCommitHash = null   // set before every update; used for rollback
+let _updateCheckCache = null // { result, fetchedAt }
+const UPDATE_CACHE_TTL = 5 * 60 * 1000
+
+function localCommitHash() {
+  try { return execSync('git rev-parse HEAD', { cwd: REPO_ROOT }).toString().trim() } catch { return null }
+}
+
+async function fetchRemoteCommit() {
+  const r = await fetch('https://api.github.com/repos/spinny-au/spinny-local-minimal/commits/main', {
+    headers: { 'User-Agent': 'spinny-local-minimal', Accept: 'application/vnd.github.v3+json' }
+  })
+  if (!r.ok) throw new Error(`GitHub API ${r.status}`)
+  const d = await r.json()
+  return { sha: d.sha, message: (d.commit?.message || '').split('\n')[0], date: d.commit?.author?.date || null }
+}
+
+function spawnStream(cmd, args, cwd, onLine) {
+  return new Promise(resolve => {
+    const p = spawn(cmd, args, { cwd, shell: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const onChunk = chunk => chunk.toString().split('\n').filter(l => l.trim()).forEach(onLine)
+    p.stdout.on('data', onChunk)
+    p.stderr.on('data', onChunk)
+    p.on('close', resolve)
+  })
+}
+
+function restartProcess() {
+  const child = spawn(process.execPath, process.argv.slice(1), {
+    detached: true, stdio: 'ignore', cwd: REPO_ROOT, env: process.env,
+  })
+  child.unref()
+  setTimeout(() => process.exit(0), 800)
+}
 import { randomBytes } from 'node:crypto'
 import { loadState, saveState, generatePairingCode } from './state.js'
 import { pairNodeDirect } from './pairing.js'
@@ -935,38 +972,97 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       return
     }
 
-    // Check for updates — compare local version to GitHub package.json
+    // Check for updates — compare git commit hashes, cached 5 min
     if (url.pathname === '/api/update/check' && req.method === 'GET') {
+      const now = Date.now()
+      if (_updateCheckCache && (now - _updateCheckCache.fetchedAt) < UPDATE_CACHE_TTL) {
+        return json(res, _updateCheckCache.result)
+      }
       try {
-        const ghRes = await fetch('https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/package.json')
-        const ghPkg = await ghRes.json()
-        const remoteVersion = ghPkg.version || '0.0.0'
-        return json(res, { updateAvailable: remoteVersion !== LOCAL_VERSION, localVersion: LOCAL_VERSION, remoteVersion })
+        const localHash = localCommitHash()
+        const remote = await fetchRemoteCommit()
+        const updateAvailable = !!(localHash && remote.sha && localHash !== remote.sha)
+        const result = {
+          updateAvailable,
+          localHash: localHash ? localHash.slice(0, 8) : null,
+          remoteHash: remote.sha ? remote.sha.slice(0, 8) : null,
+          remoteMessage: remote.message,
+          remoteDate: remote.date,
+          localVersion: LOCAL_VERSION,
+        }
+        _updateCheckCache = { result, fetchedAt: now }
+        return json(res, result)
       } catch (err) {
         return json(res, { updateAvailable: false, localVersion: LOCAL_VERSION, error: err.message })
       }
     }
 
-    // Apply update — git pull + npm install, streamed as SSE
+    // Apply update — fetch + reset --hard + npm install + auto-rollback on failure, then restart
     if (url.pathname === '/api/update/apply' && req.method === 'POST') {
       cors(res)
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
-      const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`)
-      const cwd = join(import.meta.dirname, '..')
-      send({ status: 'Pulling latest code…' })
-      const pull = spawn('git', ['pull', 'origin', 'main'], { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-      const onChunk = (chunk) => chunk.toString().split('\n').filter(l => l.trim()).forEach(l => send({ status: l }))
-      pull.stdout.on('data', onChunk)
-      pull.stderr.on('data', onChunk)
-      pull.on('close', (code) => {
-        if (code !== 0) { send({ done: true, success: false }); return res.end() }
+      const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
+
+      const savedHash = localCommitHash()
+      _prevCommitHash = savedHash
+      _updateCheckCache = null // invalidate cache
+
+      const rollback = async (reason) => {
+        send({ status: `⚠ ${reason} — rolling back…` })
+        await spawnStream('git', ['reset', '--hard', savedHash], REPO_ROOT, l => send({ status: l }))
+        await spawnStream('npm', ['install', '--omit=dev'], REPO_ROOT, l => send({ status: l }))
+        send({ done: true, success: false, rolledBack: true })
+        res.end()
+      }
+
+      try {
+        send({ status: 'Fetching latest code…' })
+        const fetchCode = await spawnStream('git', ['fetch', 'origin', 'main'], REPO_ROOT, l => send({ status: l }))
+        if (fetchCode !== 0) return rollback('git fetch failed')
+
+        send({ status: 'Applying update…' })
+        const resetCode = await spawnStream('git', ['reset', '--hard', 'origin/main'], REPO_ROOT, l => send({ status: l }))
+        if (resetCode !== 0) return rollback('git reset failed')
+
         send({ status: 'Installing dependencies…' })
-        const install = spawn('npm', ['install', '--omit=dev'], { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-        install.stdout.on('data', onChunk)
-        install.stderr.on('data', onChunk)
-        install.on('close', (c) => { send({ done: true, success: c === 0 }); res.end() })
-      })
-      req.on('close', () => pull.kill())
+        const installCode = await spawnStream('npm', ['install', '--omit=dev'], REPO_ROOT, l => send({ status: l }))
+        if (installCode !== 0) return rollback('npm install failed')
+
+        send({ done: true, success: true, restarting: true })
+        res.end()
+        restartProcess()
+      } catch (err) {
+        await rollback(err.message)
+      }
+      return
+    }
+
+    // Rollback to the commit saved before the last update
+    if (url.pathname === '/api/update/rollback' && req.method === 'POST') {
+      cors(res)
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
+      const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
+
+      const target = _prevCommitHash
+      if (!target) {
+        send({ done: true, success: false, error: 'No previous version recorded — restart the node to restore.' })
+        return res.end()
+      }
+
+      _updateCheckCache = null
+      send({ status: `Rolling back to ${target.slice(0, 8)}…` })
+      try {
+        const resetCode = await spawnStream('git', ['reset', '--hard', target], REPO_ROOT, l => send({ status: l }))
+        if (resetCode !== 0) { send({ done: true, success: false, error: 'git reset failed' }); return res.end() }
+        send({ status: 'Reinstalling dependencies…' })
+        await spawnStream('npm', ['install', '--omit=dev'], REPO_ROOT, l => send({ status: l }))
+        send({ done: true, success: true, restarting: true })
+        res.end()
+        restartProcess()
+      } catch (err) {
+        send({ done: true, success: false, error: err.message })
+        res.end()
+      }
       return
     }
 
