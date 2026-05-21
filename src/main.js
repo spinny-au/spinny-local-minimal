@@ -142,32 +142,39 @@ try {
 
       // Poll spinny.au for claim — when someone enters the code on spinny.au,
       // complete pairing via signed pairNodeDirect (no direct network access needed)
+      let pollCount = 0
       const pollTimer = setInterval(async () => {
+        pollCount++
         try {
-          // Always read current code from state — it rotates every 60s
           const { pairingCode: currentCode, nodeId: currentNodeId } = loadState()
-          if (!currentCode) return
+          if (!currentCode) { console.log('[relay-pair] poll: no code in state'); return }
+          console.log(`[relay-pair] poll #${pollCount} code=${currentCode} nodeId=${currentNodeId.slice(0,8)}…`)
           const r = await fetch(
             `${controlUrl}/api/spinny/pairing/status?code=${currentCode}&nodeId=${currentNodeId}`,
             { signal: AbortSignal.timeout(8000) }
           );
           const body = await r.json();
+          console.log(`[relay-pair] poll #${pollCount} → HTTP ${r.status}`, JSON.stringify(body))
           if (!r.ok) { console.error('[relay-pair] poll error:', r.status, body); return; }
+          if (body.expired) { console.log('[relay-pair] code expired on cloud — waiting for rotation'); return; }
+          if (body.waiting) { console.log('[relay-pair] waiting for user to enter code'); return; }
           if (body.claimed && body.accountEmail) {
             pairingClaimSeen = true
             clearInterval(rotateTimer)
-            console.log(`[relay-pair] claimed by ${body.accountEmail} — completing pairing…`);
+            console.log(`[relay-pair] CLAIMED by ${body.accountEmail} — calling pairNodeDirect…`);
             try {
               const result = await pairNodeDirect({ accountEmail: body.accountEmail, pairingCode: currentCode, controlUrl });
               clearInterval(pollTimer);
-              console.log(`[relay-pair] paired! Account: ${result.accountId}`);
+              console.log(`[relay-pair] SUCCESS — paired! nodeId=${result.nodeId} accountId=${result.accountId}`);
               pairingResolver?.(result);
             } catch (err) {
-              console.error('[relay-pair] pairNodeDirect failed:', err.message);
+              console.error('[relay-pair] pairNodeDirect FAILED:', err.message);
             }
+          } else {
+            console.log('[relay-pair] unexpected poll response:', JSON.stringify(body))
           }
         } catch (err) {
-          console.error('[relay-pair] poll failed:', err.message);
+          console.error('[relay-pair] poll EXCEPTION:', err.message);
         }
       }, 5000);
 
