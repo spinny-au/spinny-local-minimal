@@ -217,7 +217,7 @@ step "Waiting for node to initialise"
 STATE_FILE="$STATE_DIR/state.json"
 LOG_FILE="$INSTALL_DIR/spinny-local.log"
 PAIRING_CODE=""; PAIRED=false
-for i in $(seq 1 60); do
+for i in $(seq 1 90); do
   sleep 1
   # Check if already paired
   if [[ -f "$STATE_FILE" ]]; then
@@ -229,7 +229,7 @@ for i in $(seq 1 60); do
     LAST_AD=$(grep -oP '\[relay-pair\] advertise \K[A-Z0-9]+(?= ->)' "$LOG_FILE" 2>/dev/null | tail -1 || true)
     [[ -n "$LAST_AD" ]] && PAIRING_CODE="$LAST_AD" && break
   fi
-  # Fallback: read from state.json
+  # Fallback: keep state.json as a candidate, but keep waiting for the active log advertisement.
   if [[ -f "$STATE_FILE" ]]; then
     CODE=$(grep -oP '(?<="pairingCode":")[^"]+' "$STATE_FILE" 2>/dev/null || true)
     [[ -n "$CODE" ]] && PAIRING_CODE="$CODE"
@@ -400,3 +400,11 @@ echo -e "${DIM}${LINE}${RST}"
 echo -e "  Node is ready. Open ${B}spinny.au${RST} and enter your pairing code."
 echo -e "${DIM}${LINE}${RST}"
 echo ""
+
+if ! $PAIRED && [[ -n "$PAIRING_CODE" ]]; then
+  echo ""
+  echo -e "${Y}${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
+  echo -e "${Y}${B}  PAIR THIS NODE AT SPINNY.AU  →  CODE: ${PAIRING_CODE}${RST}"
+  echo -e "${Y}${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
+  echo ""
+fi

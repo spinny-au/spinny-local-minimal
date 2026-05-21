@@ -190,16 +190,24 @@ ok "Service started (runs at login)"
 # ── 9. Wait for pairing code ──────────────────────────────────────────────────
 step "Waiting for node to initialise"
 STATE_FILE="$STATE_DIR/state.json"
+LOG_FILE="$INSTALL_DIR/spinny-local.log"
 PAIRING_CODE=""; PAIRED=false
-for i in $(seq 1 30); do
+for i in $(seq 1 90); do
   sleep 1
-  [[ ! -f "$STATE_FILE" ]] && continue
-  CODE=$(grep -oP '(?<="pairingCode":")[^"]+' "$STATE_FILE" 2>/dev/null || true)
-  IS_PAIRED=$(grep -oP '(?<="paired":)true' "$STATE_FILE" 2>/dev/null || true)
-  [[ -n "$IS_PAIRED" ]] && PAIRED=true && break
-  [[ -n "$CODE" ]] && PAIRING_CODE="$CODE" && break
+  if [[ -f "$STATE_FILE" ]]; then
+    IS_PAIRED=$(grep -oP '(?<="paired":)true' "$STATE_FILE" 2>/dev/null || true)
+    [[ -n "$IS_PAIRED" ]] && PAIRED=true && break
+  fi
+  if [[ -f "$LOG_FILE" ]]; then
+    LAST_AD=$(grep -oP '\[relay-pair\] advertise \K[A-Z0-9]+(?= ->)' "$LOG_FILE" 2>/dev/null | tail -1 || true)
+    [[ -n "$LAST_AD" ]] && PAIRING_CODE="$LAST_AD" && break
+  fi
+  if [[ -f "$STATE_FILE" ]]; then
+    CODE=$(grep -oP '(?<="pairingCode":")[^"]+' "$STATE_FILE" 2>/dev/null || true)
+    [[ -n "$CODE" ]] && PAIRING_CODE="$CODE"
+  fi
 done
-[[ -z "$PAIRING_CODE" && "$PAIRED" == "false" ]] && PAIRING_CODE="run: launchctl log $(SERVICE_LABEL)"
+[[ -z "$PAIRING_CODE" && "$PAIRED" == "false" ]] && PAIRING_CODE="run: launchctl log $SERVICE_LABEL"
 
 # ── 10. Tailscale ─────────────────────────────────────────────────────────────
 TAILSCALE_STR="Not installed"
@@ -298,3 +306,11 @@ echo -e "${DIM}${LINE}${RST}"
 echo -e "  Node is ready. Open ${B}spinny.au${RST} and enter your pairing code."
 echo -e "${DIM}${LINE}${RST}"
 echo ""
+
+if ! $PAIRED && [[ -n "$PAIRING_CODE" ]]; then
+  echo ""
+  echo -e "${Y}${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
+  echo -e "${Y}${B}  PAIR THIS NODE AT SPINNY.AU  →  CODE: ${PAIRING_CODE}${RST}"
+  echo -e "${Y}${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
+  echo ""
+fi

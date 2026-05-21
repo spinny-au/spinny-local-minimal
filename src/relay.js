@@ -76,11 +76,22 @@ async function pushHealthDirect() {
   const state = loadState()
   if (!state.paired || !state.nodeId) return
   const base = (state.controlUrl || 'https://spinny.au').replace(/\/$/, '')
+  const headers = { 'content-type': 'application/json' }
+  if (state.relaySessionToken) {
+    headers['authorization'] = `Bearer ${state.relaySessionToken}`
+    headers['x-spinny-node-id'] = state.nodeId
+  }
   await fetch(`${base}/api/spinny/local-nodes/${encodeURIComponent(state.nodeId)}/health`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify({ health: getSystemInfo() }),
+    signal: AbortSignal.timeout(8000),
   })
+}
+
+export function startHealthPush() {
+  pushHealthDirect().catch(() => {})
+  setInterval(() => pushHealthDirect().catch(() => {}), 25_000).unref()
 }
 
 function healthMessage() {

@@ -6,7 +6,7 @@ import qrcode from 'qrcode-terminal'
 import { ensureNodeIdentity } from "./identity.js";
 import { ensureVaultKey, Vault } from "./vault.js";
 import { pairNode, pairNodeDirect } from "./pairing.js";
-import { RelayClient } from "./relay.js";
+import { RelayClient, startHealthPush } from "./relay.js";
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
 import { startLocalServer } from "./local-server.js";
@@ -204,6 +204,9 @@ try {
       startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
     }
 
+    // Push health immediately and every 25s — works without relay WS
+    startHealthPush();
+
     // Start relay — use values from state if available (set during pairing)
     const currentState = loadState();
     const relay = relayInstance = new RelayClient({
@@ -214,7 +217,11 @@ try {
     relay.on?.('connected', () => { relayConnected = true; relayError = null });
     relay.on?.('disconnected', () => { relayConnected = false; relayError = relay.lastError || 'Relay disconnected' });
 
-    relay.connect().catch(() => {});
+    relay.connect().catch((err) => {
+      relayConnected = false;
+      relayError = err?.message || String(err);
+      console.error('[relay] initial connect failed:', relayError);
+    });
 
     console.log("Spinny local node running.");
 
