@@ -70,14 +70,16 @@ function spawnStream(cmd, args, cwd, onLine) {
 }
 
 function restartProcess() {
-  const child = process.platform === 'win32'
-    ? spawn(process.execPath, process.argv.slice(1), {
-        detached: true, stdio: 'ignore', cwd: REPO_ROOT, env: process.env, windowsHide: true,
-      })
-    : spawn(process.execPath, process.argv.slice(1), {
-        detached: true, stdio: 'ignore', cwd: REPO_ROOT, env: process.env,
-      })
-  child.unref()
+  if (process.platform === 'win32') {
+    // Use Task Scheduler to restart — avoids flash from spawning a new console process
+    spawn('schtasks.exe', ['/run', '/tn', 'SpinnyLocalNode'], {
+      detached: true, stdio: 'ignore', windowsHide: true,
+    }).unref()
+  } else {
+    spawn(process.execPath, process.argv.slice(1), {
+      detached: true, stdio: 'ignore', cwd: REPO_ROOT, env: process.env,
+    }).unref()
+  }
   setTimeout(() => process.exit(0), 800)
 }
 

@@ -49,19 +49,22 @@ async function runNpmInstall() {
 }
 
 function restartNode() {
-  const child = spawn(process.execPath, [
-    '--experimental-sqlite',
-    '--no-warnings',
-    '--env-file-if-exists=.env',
-    'src/main.js',
-    'start',
-  ], {
-    cwd: repoRoot,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  })
-  child.unref()
+  if (process.platform === 'win32') {
+    // Restart via Task Scheduler — same hidden launcher used at login, no flash
+    spawn('schtasks.exe', ['/run', '/tn', 'SpinnyLocalNode'], {
+      detached: true, stdio: 'ignore', windowsHide: true,
+    }).unref()
+  } else {
+    spawn(process.execPath, [
+      '--experimental-sqlite',
+      '--no-warnings',
+      '--env-file-if-exists=.env',
+      'src/main.js',
+      'start',
+    ], {
+      cwd: repoRoot, detached: true, stdio: 'ignore',
+    }).unref()
+  }
 }
 
 async function main() {
