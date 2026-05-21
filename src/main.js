@@ -90,11 +90,12 @@ try {
         if (!needsMorePairings(s)) return
         const code = generatePairingCode()
         saveState({ ...s, pairingCode: code, pairingCodeIssuedAt: Date.now() })
+        const identity = ensureNodeIdentity()
         try {
           const r = await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pairingCode: code, nodeId: s.nodeId }),
+            body: JSON.stringify({ pairingCode: code, nodeId: s.nodeId, nodePublicKey: identity.publicKeyDer }),
             signal: AbortSignal.timeout(8000),
           })
           console.log(`[relay-pair] advertise ${code} -> ${r.status}`)
@@ -158,18 +159,25 @@ try {
           if (!r.ok) { console.error('[relay-pair] poll error:', r.status, body); return; }
           if (body.expired) { console.log('[relay-pair] code expired on cloud — waiting for rotation'); return; }
           if (body.waiting) { console.log('[relay-pair] waiting for user to enter code'); return; }
-          if (body.claimed && body.accountEmail) {
+          if (body.claimed && body.relaySessionToken) {
             pairingClaimSeen = true
             clearInterval(rotateTimer)
-            console.log(`[relay-pair] CLAIMED by ${body.accountEmail} — calling pairNodeDirect…`);
-            try {
-              const result = await pairNodeDirect({ accountEmail: body.accountEmail, pairingCode: currentCode, controlUrl });
-              clearInterval(pollTimer);
-              console.log(`[relay-pair] SUCCESS — paired! nodeId=${result.nodeId} accountId=${result.accountId}`);
-              pairingResolver?.(result);
-            } catch (err) {
-              console.error('[relay-pair] pairNodeDirect FAILED:', err.message);
-            }
+            clearInterval(pollTimer)
+            console.log(`[relay-pair] CLAIMED by ${body.accountEmail} — relay session received, saving state…`);
+            const newState = saveState({
+              ...loadState(),
+              paired: true,
+              accountId: body.accountEmail,
+              relaySessionToken: body.relaySessionToken,
+              relaySessionExpiresAt: new Date(body.relaySessionExpires * 1000).toISOString(),
+              controlPlanePublicKey: body.controlPlanePublicKey || null,
+              relayUrl: body.relayUrl || null,
+            })
+            console.log(`[relay-pair] SUCCESS — paired! nodeId=${newState.nodeId} accountId=${newState.accountId}`);
+            pairingResolver?.(newState);
+          } else if (body.claimed && body.accountEmail) {
+            // Fallback: claimed but no relay token yet (node_public_key not in advertisement)
+            console.log(`[relay-pair] CLAIMED by ${body.accountEmail} but no relaySessionToken yet — waiting…`)
           } else {
             console.log('[relay-pair] unexpected poll response:', JSON.stringify(body))
           }
