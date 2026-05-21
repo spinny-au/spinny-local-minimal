@@ -7,8 +7,8 @@ import { spinnyHome } from './paths.js'
 
 let lastCpuSample = null
 
-// Cache ollama list — refreshed every 30s in the background so /api/system is instant
-let ollamaCache = { models: [], running: false, updatedAt: 0 }
+// Cache ollama list + running model — refreshed every 30s so /api/system is instant
+let ollamaCache = { models: [], running: false, loadedModel: null, updatedAt: 0 }
 
 function refreshOllamaCache() {
   try {
@@ -19,9 +19,18 @@ function refreshOllamaCache() {
       const size = parts[2] ? (parts[3]?.match(/^[A-Za-z]+$/) ? `${parts[2]} ${parts[3]}` : parts[2]) : ''
       return { name: parts[0], size }
     }).filter(m => m.name && m.name !== 'NAME')
-    ollamaCache = { models, running: true, updatedAt: Date.now() }
+
+    // ollama ps shows which model is currently loaded in RAM
+    let loadedModel = null
+    try {
+      const psOut = execSync('ollama ps', { timeout: 3000 }).toString()
+      const psLines = psOut.split('\n').slice(1).filter(l => l.trim())
+      if (psLines.length > 0) loadedModel = psLines[0].trim().split(/\s+/)[0] || null
+    } catch {}
+
+    ollamaCache = { models, running: true, loadedModel, updatedAt: Date.now() }
   } catch {
-    ollamaCache = { models: ollamaCache.models, running: false, updatedAt: Date.now() }
+    ollamaCache = { models: ollamaCache.models, running: false, loadedModel: ollamaCache.loadedModel, updatedAt: Date.now() }
   }
 }
 
@@ -89,6 +98,7 @@ export function getSystemInfo() {
 
   const ollamaModels = ollamaCache.models
   const ollamaRunning = ollamaCache.running
+  const loadedModel = ollamaCache.loadedModel
 
   // Read package.json for version
   let version = '0.1.0'
@@ -114,6 +124,7 @@ export function getSystemInfo() {
     gpu,
     ollamaRunning,
     models: ollamaModels,
+    loadedModel,
     tailscaleIp,
     capabilities: {
       modelInstall: true,
