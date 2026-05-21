@@ -7,7 +7,7 @@
 # Update only (keeps pairing):
 #   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/bootstrap-windows.ps1'))) --update
 
-$INSTALLER_VERSION = '2026-05-21.6'
+$INSTALLER_VERSION = '2026-05-22.1'
 
 $isFresh  = $args -contains '--fresh'  -or $args -contains '-fresh'
 $isUpdate = $args -contains '--update' -or $args -contains '-update'
@@ -224,26 +224,26 @@ step 'Registering auto-start (Task Scheduler)'
 $nodeBin = (Get-Command node).Source
 $logPath = "$INSTALL_DIR\spinny-local.log"
 
-# Write a dedicated launcher script — Start-Transcript captures everything at session level
+# PowerShell launcher — writes to log file, no output visible to user
 $launcherPath = "$INSTALL_DIR\start-node.ps1"
 $launcherContent = @"
-Start-Transcript -Path '$logPath' -Force
-Write-Host "=== SpinnyLocalNode launcher `$(Get-Date) ==="
-Write-Host "Node binary: '$nodeBin'"
-Write-Host "Node version: `$(& '$nodeBin' --version 2>&1)"
-Write-Host "Working dir: `$(Get-Location)"
 Set-Location '$INSTALL_DIR'
-Write-Host "src/main.js exists: `$(Test-Path src/main.js)"
-Write-Host "Starting node..."
-& '$nodeBin' --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js start
-Write-Host "Node exited with code: `$LASTEXITCODE"
-Stop-Transcript
+& '$nodeBin' --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js start *>> '$logPath'
 "@
 [System.IO.File]::WriteAllText($launcherPath, $launcherContent, [System.Text.UTF8Encoding]::new($false))
 
+# VBScript shim — wscript.exe with window style 0 is fully hidden at the Win32
+# level, unlike powershell.exe -WindowStyle Hidden which can still flash a window.
+$vbsPath = "$INSTALL_DIR\start-node.vbs"
+$vbsContent = @"
+Set sh = CreateObject("WScript.Shell")
+sh.Run "powershell.exe -ExecutionPolicy Bypass -NonInteractive -NoProfile -File """ & "$launcherPath" & """", 0, False
+"@
+[System.IO.File]::WriteAllText($vbsPath, $vbsContent, [System.Text.UTF8Encoding]::new($false))
+
 $action  = New-ScheduledTaskAction `
-    -Execute     'powershell.exe' `
-    -Argument    "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" `
+    -Execute     'wscript.exe' `
+    -Argument    "`"$vbsPath`" //nologo" `
     -WorkingDirectory $INSTALL_DIR
 $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet `
@@ -272,10 +272,9 @@ step 'Starting node'
 # Always use Start-Process for the immediate launch — Start-ScheduledTask runs in
 # a restricted session and silently fails to execute the launcher on some machines.
 # The Task Scheduler registration above is for auto-start at login only.
-Start-Process 'powershell.exe' `
-    -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" `
-    -WorkingDirectory $INSTALL_DIR `
-    -WindowStyle Hidden
+Start-Process 'wscript.exe' `
+    -ArgumentList "`"$vbsPath`" //nologo" `
+    -WorkingDirectory $INSTALL_DIR
 if ($taskRegistered) {
     ok 'Node started — will also auto-start at every login via Task Scheduler'
 } else {
