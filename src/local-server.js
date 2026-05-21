@@ -81,6 +81,23 @@ function restartProcess() {
   setTimeout(() => process.exit(0), 800)
 }
 
+function startUpdateWorker(mode, target = '') {
+  const child = spawn(process.execPath, [
+    join(REPO_ROOT, 'scripts', 'update-worker.mjs'),
+    REPO_ROOT,
+    mode,
+    target || '',
+  ], {
+    cwd: REPO_ROOT,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: process.env,
+  })
+  child.unref()
+  setTimeout(() => process.exit(0), 500)
+}
+
 function openExternal(target) {
   try {
     if (process.platform === 'win32') {
@@ -1123,33 +1140,14 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       _prevCommitHash = savedHash
       _updateCheckCache = null // invalidate cache
 
-      const rollback = async (reason) => {
-        send({ status: `⚠ ${reason} — rolling back…` })
-        await spawnStream('git', ['reset', '--hard', savedHash], REPO_ROOT, l => send({ status: l }))
-        await spawnStream('npm', ['install', '--omit=dev'], REPO_ROOT, l => send({ status: l }))
-        send({ done: true, success: false, rolledBack: true })
-        res.end()
-      }
-
       try {
-        send({ status: 'Fetching latest code…' })
-        const fetchCode = await spawnStream('git', ['fetch', 'origin', 'main'], REPO_ROOT, l => send({ status: l }))
-        if (fetchCode !== 0) return rollback('git fetch failed')
-
-        send({ status: 'Applying update…' })
-        const resetCode = await spawnStream('git', ['reset', '--hard', 'origin/main'], REPO_ROOT, l => send({ status: l }))
-        if (resetCode !== 0) return rollback('git reset failed')
-
-        send({ status: 'Installing dependencies…' })
-        const installCode = await spawnStream('npm', ['install', '--omit=dev'], REPO_ROOT, l => send({ status: l }))
-        if (installCode !== 0) return rollback('npm install failed')
-
-        send({ status: 'Restarting Spinny Local. The dashboard will be back soon.' })
+        send({ status: 'Starting hidden background updater. The dashboard will be back soon.' })
         send({ done: true, success: true, restarting: true })
         res.end()
-        restartProcess()
+        startUpdateWorker('apply', savedHash || '')
       } catch (err) {
-        await rollback(err.message)
+        send({ done: true, success: false, error: err.message })
+        res.end()
       }
       return
     }
@@ -1167,16 +1165,11 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       }
 
       _updateCheckCache = null
-      send({ status: `Rolling back to ${target.slice(0, 8)}…` })
+      send({ status: `Starting hidden rollback to ${target.slice(0, 8)}. The dashboard will be back soon.` })
       try {
-        const resetCode = await spawnStream('git', ['reset', '--hard', target], REPO_ROOT, l => send({ status: l }))
-        if (resetCode !== 0) { send({ done: true, success: false, error: 'git reset failed' }); return res.end() }
-        send({ status: 'Reinstalling dependencies…' })
-        await spawnStream('npm', ['install', '--omit=dev'], REPO_ROOT, l => send({ status: l }))
-        send({ status: 'Restarting Spinny Local. The dashboard will be back soon.' })
         send({ done: true, success: true, restarting: true })
         res.end()
-        restartProcess()
+        startUpdateWorker('rollback', target)
       } catch (err) {
         send({ done: true, success: false, error: err.message })
         res.end()
