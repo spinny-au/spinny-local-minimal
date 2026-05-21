@@ -150,7 +150,58 @@ NODE_NAME_ENV="${EXISTING_NAME:-spinny-${NODE_SLUG:-node}}"
 } > "$ENV_FILE"
 ok ".env written (node name: ${NODE_NAME_ENV})"
 
-# ── 8. launchd service ────────────────────────────────────────────────────────
+# ── 8. spinny CLI wrapper ─────────────────────────────────────────────────────
+step "Installing spinny CLI"
+CLI_DIR="$HOME/.local/bin"
+mkdir -p "$CLI_DIR"
+cat > "$CLI_DIR/spinny" <<'SPINNY_CLI'
+#!/usr/bin/env bash
+# spinny CLI — manage your Spinny local node
+PLIST="$HOME/Library/LaunchAgents/au.spinny.local-node.plist"
+SERVICE_LABEL="au.spinny.local-node"
+INSTALL_DIR="$HOME/.spinny/node"
+INSTALL_SCRIPT="https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/install-macos.sh"
+
+case "${1:-help}" in
+  --update|update)
+    echo "Updating Spinny local node..."
+    bash <(curl -fsSL "$INSTALL_SCRIPT") --update ;;
+  --fresh|fresh)
+    echo "Fresh install (wipes state)..."
+    bash <(curl -fsSL "$INSTALL_SCRIPT") --fresh ;;
+  status)
+    launchctl list "$SERVICE_LABEL" ;;
+  logs)
+    tail -f "$INSTALL_DIR/spinny-local.log" ;;
+  restart)
+    launchctl unload "$PLIST" 2>/dev/null; launchctl load "$PLIST" && echo "Restarted." ;;
+  stop)
+    launchctl unload "$PLIST" 2>/dev/null && echo "Stopped." ;;
+  start)
+    launchctl load "$PLIST" && echo "Started." ;;
+  help|--help|-h|*)
+    echo "Usage: spinny <command>"
+    echo ""
+    echo "  spinny --update   Pull latest code and restart"
+    echo "  spinny --fresh    Wipe state and reinstall (re-pairs)"
+    echo "  spinny status     Show service status"
+    echo "  spinny logs       Tail the node log"
+    echo "  spinny restart    Restart the service"
+    echo "  spinny start      Start the service"
+    echo "  spinny stop       Stop the service" ;;
+esac
+SPINNY_CLI
+chmod +x "$CLI_DIR/spinny"
+
+# Ensure ~/.local/bin is on PATH
+for RC in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.zprofile"; do
+  [[ -f "$RC" ]] || continue
+  grep -q '.local/bin' "$RC" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$RC"
+done
+export PATH="$HOME/.local/bin:$PATH"
+ok "spinny CLI installed — run 'spinny --update' to update in future"
+
+# ── 10. launchd service ───────────────────────────────────────────────────────
 step "Installing launchd service"
 NODE_BIN=$(which node)
 mkdir -p "$PLIST_DIR"
@@ -245,7 +296,7 @@ SVC_OK=$(launchctl list "$SERVICE_LABEL" &>/dev/null && echo true || echo false)
 STATUS_STR=$( $SVC_OK && echo "● Running" || echo "○ Not running — run: launchctl load $PLIST")
 OLLAMA_STR=$($OLLAMA_RUNNING && echo "● Running  •  ${#OLLAMA_MODELS[@]} model(s)" || echo "○ Not running")
 BRAIN="${OLLAMA_MODELS[0]:-no model installed yet}"
-GIT_STR="✓ $(git --version)  (updates: re-run install-macos.sh)"
+GIT_STR="✓ $(git --version)  (updates: spinny --update)"
 
 PORT_OK=false
 curl -sf --max-time 3 "http://localhost:${NODE_PORT}/health" >/dev/null 2>&1 && PORT_OK=true

@@ -181,7 +181,57 @@ NODE_NAME_ENV="${EXISTING_NAME:-spinny-${NODE_SLUG:-node}}"
 } > "$ENV_FILE"
 ok ".env written (node name: ${NODE_NAME_ENV})"
 
-# ── 8. systemd user service ───────────────────────────────────────────────────
+# ── 8. spinny CLI wrapper ─────────────────────────────────────────────────────
+step "Installing spinny CLI"
+CLI_DIR="$HOME/.local/bin"
+mkdir -p "$CLI_DIR"
+cat > "$CLI_DIR/spinny" <<'SPINNY_CLI'
+#!/usr/bin/env bash
+# spinny CLI — manage your Spinny local node
+SERVICE="spinny-local-minimal"
+INSTALL_DIR="$HOME/.local/share/spinny-local-minimal"
+INSTALL_SCRIPT="https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/install-linux.sh"
+
+case "${1:-help}" in
+  --update|update)
+    echo "Updating Spinny local node..."
+    bash <(curl -fsSL "$INSTALL_SCRIPT") --update ;;
+  --fresh|fresh)
+    echo "Fresh install (wipes state)..."
+    bash <(curl -fsSL "$INSTALL_SCRIPT") --fresh ;;
+  status)
+    systemctl --user status "$SERVICE" --no-pager ;;
+  logs)
+    tail -f "$INSTALL_DIR/spinny-local.log" ;;
+  restart)
+    systemctl --user restart "$SERVICE" && echo "Restarted." ;;
+  stop)
+    systemctl --user stop "$SERVICE" && echo "Stopped." ;;
+  start)
+    systemctl --user start "$SERVICE" && echo "Started." ;;
+  help|--help|-h|*)
+    echo "Usage: spinny <command>"
+    echo ""
+    echo "  spinny --update   Pull latest code and restart"
+    echo "  spinny --fresh    Wipe state and reinstall (re-pairs)"
+    echo "  spinny status     Show service status"
+    echo "  spinny logs       Tail the node log"
+    echo "  spinny restart    Restart the service"
+    echo "  spinny start      Start the service"
+    echo "  spinny stop       Stop the service" ;;
+esac
+SPINNY_CLI
+chmod +x "$CLI_DIR/spinny"
+
+# Ensure ~/.local/bin is on PATH in shell rc files
+for RC in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc"; do
+  [[ -f "$RC" ]] || continue
+  grep -q '.local/bin' "$RC" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$RC"
+done
+export PATH="$HOME/.local/bin:$PATH"
+ok "spinny CLI installed — run 'spinny --update' to update in future"
+
+# ── 9. systemd user service ───────────────────────────────────────────────────
 step "Installing systemd user service"
 NODE_BIN=$(command -v node)
 mkdir -p "$SERVICE_DIR"
@@ -334,7 +384,7 @@ SVC_OK=$(systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null && echo 
 STATUS_STR=$( $SVC_OK && echo "● Running" || echo "○ Not running — run: systemctl --user start ${SERVICE_NAME}")
 OLLAMA_STR=$($OLLAMA_RUNNING && echo "● Running  •  ${#OLLAMA_MODELS[@]} model(s)" || echo "○ Not running")
 BRAIN="${OLLAMA_MODELS[0]:-no model installed yet}"
-GIT_STR="✓ $(git --version)  (updates: re-run install-linux.sh)"
+GIT_STR="✓ $(git --version)  (updates: spinny --update)"
 
 PORT_OK=false
 curl -sf --max-time 3 "http://localhost:${NODE_PORT}/health" >/dev/null 2>&1 && PORT_OK=true
