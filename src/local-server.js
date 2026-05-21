@@ -745,12 +745,19 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       return
     }
 
-    // Generate a fresh pairing code on demand
+    // Generate a fresh pairing code on demand and immediately advertise it
     if (url.pathname === '/pairing/refresh' && req.method === 'POST') {
       const state = loadState()
       if (state.paired) return json(res, { error: 'already paired' }, 400)
       const code = generatePairingCode()
-      saveState({ ...state, pairingCode: code })
+      const newState = saveState({ ...state, pairingCode: code })
+      const controlUrl = process.env.SPINNY_CONTROL_URL || 'https://spinny.au'
+      fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairingCode: code, nodeId: newState.nodeId }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {})
       return json(res, { code })
     }
 
