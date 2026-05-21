@@ -1315,6 +1315,8 @@ function AdminTab() {
   const [pairingToken, setPairingToken] = useState(null)
   const [tokenVisible, setTokenVisible] = useState(false)
   const [tokenCopied, setTokenCopied] = useState(false)
+  const [tokenBusy, setTokenBusy] = useState(false)
+  const [tokenMsg, setTokenMsg] = useState(null)
   const [config, setConfig] = useState(null)
   const [configBusy, setConfigBusy] = useState(false)
   const [configMsg, setConfigMsg] = useState(null)
@@ -1361,6 +1363,22 @@ function AdminTab() {
     navigator.clipboard.writeText(pairingToken.code).then(() => {
       setTokenCopied(true); setTimeout(() => setTokenCopied(false), 2000)
     })
+  }
+
+  async function regenerateToken() {
+    setTokenBusy(true); setTokenMsg(null)
+    try {
+      const r = await fetch('/pairing/token/regenerate', { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.advertised?.body?.error || d.error || 'Could not advertise new code')
+      setPairingToken(d)
+      setTokenVisible(true)
+      setTokenMsg({ type: 'ok', text: `New code advertised: ${d.code}` })
+      setTimeout(() => setTokenMsg(null), 3500)
+    } catch (e) {
+      setTokenMsg({ type: 'err', text: e.message })
+    }
+    setTokenBusy(false)
   }
 
   async function saveConfig(patch) {
@@ -1410,6 +1428,7 @@ function AdminTab() {
 
   const remaining = pairingToken?.remaining ?? pairingToken?.ttl ?? 60
   const ttl = pairingToken?.ttl ?? 60
+  const ttlLabel = ttl >= 60 ? `${Math.round(ttl / 60)} min` : `${ttl}s`
 
   return (
     <>
@@ -1417,19 +1436,23 @@ function AdminTab() {
         <div className="card-title">Pairing Token</div>
         {pairingToken && !pairingToken.paired ? (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
               <TotpRing remaining={remaining} ttl={ttl} />
-              <div style={{ fontFamily: 'monospace', fontSize: 28, fontWeight: 700, letterSpacing: '0.18em', flex: 1, color: 'var(--text)' }}>
+              <div style={{ fontFamily: 'monospace', fontSize: 28, fontWeight: 700, letterSpacing: '0.18em', flex: '1 1 160px', color: 'var(--text)' }}>
                 {tokenVisible ? (pairingToken.code || '——') : '••••••'}
               </div>
               <button className="btn secondary" onClick={() => setTokenVisible(v => !v)} style={{ fontSize: 16, padding: '6px 10px' }}>
                 {tokenVisible ? '🙈' : '👁'}
               </button>
               <button className="btn" onClick={copyToken} disabled={!tokenVisible}>{tokenCopied ? '✓' : 'Copy'}</button>
+              <button className="btn secondary" onClick={regenerateToken} disabled={tokenBusy}>
+                {tokenBusy ? 'Regenerating...' : 'Regenerate'}
+              </button>
             </div>
             <div className="pairing-hint" style={{ marginTop: 8 }}>
-              Rotates every {ttl}s — enter this code at spinny.au to pair your node.
+              Valid for {ttlLabel}. If spinny.au says the code is expired or already claimed, regenerate it here.
             </div>
+            {tokenMsg && <div className={`msg ${tokenMsg.type}`} style={{ marginTop: 8 }}>{tokenMsg.text}</div>}
           </>
         ) : (
           <div style={{ color: 'var(--ok)', fontSize: 13 }}>

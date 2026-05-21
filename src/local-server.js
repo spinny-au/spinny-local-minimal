@@ -130,7 +130,42 @@ function startTailscaleSetup() {
     return { ok: false, error: err.message, ...info }
   }
 }
+
+async function advertisePairingCode(state, code) {
+  const controlUrl = state.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au'
+  const identity = ensureNodeIdentity()
+  const response = await fetch(`${controlUrl.replace(/\/$/, '')}/api/spinny/pairing/advertise`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pairingCode: code, nodeId: state.nodeId, nodePublicKey: identity.publicKeyDer }),
+    signal: AbortSignal.timeout(10000),
+  })
+  const body = await response.json().catch(() => ({}))
+  return { ok: response.ok, status: response.status, body }
+}
+
+async function regeneratePairingCode() {
+  const current = saveState(loadState())
+  const code = generatePairingCode()
+  const next = saveState({ ...current, pairingCode: code, pairingCodeIssuedAt: Date.now() })
+  const advertised = await advertisePairingCode(next, code).catch((err) => ({
+    ok: false,
+    status: 0,
+    body: { error: err.message },
+  }))
+  return {
+    code,
+    issuedAt: next.pairingCodeIssuedAt,
+    ttl: 600,
+    remaining: 600,
+    paired: next.paired,
+    maxPairedAccounts: next.maxPairedAccounts || 1,
+    pairedCount: next.allowedUsers?.length || (next.paired ? 1 : 0),
+    advertised,
+  }
+}
 import { loadState, saveState, generatePairingCode } from './state.js'
+import { ensureNodeIdentity } from './identity.js'
 import { pairNodeDirect } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
 import { getLines } from './log-buffer.js'
@@ -873,7 +908,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       if (!isDashboardAuthed(req)) return json(res, { error: 'unauthorized' }, 401)
       const state = loadState()
       const issuedAt = state.pairingCodeIssuedAt || Date.now()
-      const ttl = 60
+      const ttl = 600
       const elapsed = Math.floor((Date.now() - issuedAt) / 1000)
       const remaining = Math.max(0, ttl - (elapsed % ttl))
       return json(res, {
@@ -883,6 +918,12 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         maxPairedAccounts: state.maxPairedAccounts || 1,
         pairedCount: state.allowedUsers?.length || (state.paired ? 1 : 0),
       })
+    }
+
+    if (url.pathname === '/pairing/token/regenerate' && req.method === 'POST') {
+      if (!isDashboardAuthed(req)) return json(res, { error: 'unauthorized' }, 401)
+      const result = await regeneratePairingCode()
+      return json(res, result, result.advertised?.ok ? 200 : 502)
     }
 
     // Admin config — dashboard auth required
