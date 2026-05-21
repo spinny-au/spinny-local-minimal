@@ -202,7 +202,7 @@ try {
 
 $action  = New-ScheduledTaskAction `
     -Execute     'powershell.exe' `
-    -Argument    "-WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" `
+    -Argument    "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" `
     -WorkingDirectory $INSTALL_DIR
 $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet `
@@ -234,7 +234,7 @@ if ($taskRegistered) {
         ok 'Node started via Task Scheduler'
     } catch {
         warn 'Task start failed — launching directly'
-        Start-Process 'powershell.exe' -ArgumentList "-WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" -WorkingDirectory $INSTALL_DIR
+        Start-Process 'powershell.exe' -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" -WorkingDirectory $INSTALL_DIR
         ok 'Node started in background'
     }
 } else {
