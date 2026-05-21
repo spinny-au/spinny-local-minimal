@@ -10,8 +10,12 @@
 # Update only (keeps pairing):
 #   bash <(curl -fsSL .../install-linux.sh) --update
 #
-# Headless server (auto-installs + connects Tailscale for remote access):
+# Headless server — installs Tailscale, waits for browser auth, sets up HTTPS proxy:
 #   bash <(curl -fsSL .../install-linux.sh) --headless
+#
+# Headless + pre-auth key (fully automated, no browser interaction):
+#   bash <(curl -fsSL .../install-linux.sh) --headless --ts-authkey=tskey-auth-xxxxx
+#   Get a key at: https://login.tailscale.com/admin/settings/keys
 set -euo pipefail
 
 REPO_URL="https://github.com/spinny-au/spinny-local-minimal.git"
@@ -23,11 +27,12 @@ SERVICE_NAME="spinny-local-minimal"
 NODE_PORT=47821
 CONTROL_URL="https://spinny.au"
 
-FRESH=false; UPDATE=false; HEADLESS=false
+FRESH=false; UPDATE=false; HEADLESS=false; TS_AUTHKEY=""
 for arg in "$@"; do
   [[ "$arg" == "--fresh"    ]] && FRESH=true
   [[ "$arg" == "--update"   ]] && UPDATE=true
   [[ "$arg" == "--headless" ]] && HEADLESS=true
+  [[ "$arg" == --ts-authkey=* ]] && TS_AUTHKEY="${arg#--ts-authkey=}"
 done
 
 # ── Colours ───────────────────────────────────────────────────────────────────
@@ -225,53 +230,81 @@ done
 TAILSCALE_STR="Not installed"
 SPINNY_SERVE_URL=""
 if $HEADLESS; then
-  step "Installing Tailscale (headless mode)"
+  # ── Install Tailscale ────────────────────────────────────────────────────────
+  step "Installing Tailscale"
   if ! command -v tailscale &>/dev/null; then
     curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1
     ok "Tailscale installed"
   else
     ok "Tailscale already installed"
   fi
-  # Bring up tailscale in auth mode — user will need to auth via printed URL
-  if tailscale status &>/dev/null 2>&1; then
-    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
-    if [[ -z "$TAILSCALE_IP" ]]; then
-      sudo tailscale up --accept-routes 2>/dev/null || true
-      TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
-    fi
-    if [[ -n "$TAILSCALE_IP" ]]; then
-      ok "Tailscale connected: $TAILSCALE_IP"
 
-      # ── tailscale serve: HTTPS proxy so browsers can reach the node ──────────
-      # spinny.au is served over HTTPS; browsers block http:// private IPs.
-      # tailscale serve fronts the node with a valid TLS cert at :<NODE_PORT>.
-      step "Setting up tailscale serve (HTTPS proxy)"
-      TS_HOSTNAME=$(tailscale status --json 2>/dev/null \
-        | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('Self',{}).get('DNSName','').rstrip('.'))" \
-        2>/dev/null || true)
-
-      if [[ -n "$TS_HOSTNAME" ]]; then
-        # Use the same port so the URL is predictable: https://<host>:47821
-        sudo tailscale serve --bg --https="${NODE_PORT}" "http://localhost:${NODE_PORT}" 2>/dev/null \
-          || tailscale serve --bg --https="${NODE_PORT}" "http://localhost:${NODE_PORT}" 2>/dev/null \
-          || warn "tailscale serve failed — HTTPS proxy not set up; you can run it manually later"
-        SPINNY_SERVE_URL="https://${TS_HOSTNAME}:${NODE_PORT}"
-        # Persist so the node can advertise it to spinny.au
-        grep -v '^SPINNY_SERVE_URL=' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
-        echo "SPINNY_SERVE_URL=${SPINNY_SERVE_URL}" >> "$ENV_FILE"
-        ok "HTTPS proxy ready: ${SPINNY_SERVE_URL}"
-        TAILSCALE_STR="● Connected  •  ${TAILSCALE_IP}  •  ${SPINNY_SERVE_URL}"
-      else
-        warn "Could not read Tailscale hostname — skipping tailscale serve"
-        TAILSCALE_STR="● Connected  •  ${TAILSCALE_IP}"
-      fi
+  # ── Authenticate Tailscale ───────────────────────────────────────────────────
+  TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+  if [[ -z "$TAILSCALE_IP" ]]; then
+    if [[ -n "$TS_AUTHKEY" ]]; then
+      # Pre-auth key supplied — silent, non-interactive
+      step "Connecting Tailscale (pre-auth key)"
+      sudo tailscale up --authkey="$TS_AUTHKEY" --accept-routes 2>/dev/null || true
     else
-      warn "Tailscale not yet authenticated — run: sudo tailscale up"
-      TAILSCALE_STR="○ Installed — run: sudo tailscale up"
+      # Interactive: print the auth URL and wait for the user to open it
+      step "Connecting Tailscale — open the URL below in your browser"
+      echo ""
+      echo -e "  ${Y}${B}Waiting for Tailscale authentication...${RST}"
+      echo -e "  ${DIM}(or re-run with --ts-authkey=<key> for fully automated install)${RST}"
+      echo ""
+      # tailscale up prints the URL then blocks — run it in background, grep URL
+      sudo tailscale up --accept-routes 2>&1 | tee /tmp/ts-up.log &
+      TS_PID=$!
+      # Print the auth URL as soon as it appears
+      for i in $(seq 1 15); do
+        sleep 1
+        TS_URL=$(grep -oE 'https://login\.tailscale\.com/[^ ]+' /tmp/ts-up.log 2>/dev/null | head -1 || true)
+        [[ -n "$TS_URL" ]] && echo -e "\n  ${C}${B}▶ Open in your browser: ${TS_URL}${RST}\n" && break
+      done
+      # Wait up to 3 minutes for auth to complete
+      echo -e "  ${DIM}Waiting up to 3 minutes for authentication...${RST}"
+      for i in $(seq 1 180); do
+        sleep 1
+        TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+        [[ -n "$TAILSCALE_IP" ]] && break
+      done
+      kill "$TS_PID" 2>/dev/null || true
+      rm -f /tmp/ts-up.log
+    fi
+    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+  fi
+
+  if [[ -n "$TAILSCALE_IP" ]]; then
+    ok "Tailscale connected: $TAILSCALE_IP"
+
+    # ── tailscale serve: HTTPS proxy so browsers can reach the node ──────────
+    # spinny.au is served over HTTPS; browsers block http:// private IPs.
+    # tailscale serve fronts the node with a valid TLS cert at :<NODE_PORT>.
+    step "Setting up tailscale serve (HTTPS proxy)"
+    TS_HOSTNAME=$(tailscale status --json 2>/dev/null \
+      | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('Self',{}).get('DNSName','').rstrip('.'))" \
+      2>/dev/null || true)
+
+    if [[ -n "$TS_HOSTNAME" ]]; then
+      sudo tailscale serve --bg --https="${NODE_PORT}" "http://localhost:${NODE_PORT}" 2>/dev/null \
+        || tailscale serve --bg --https="${NODE_PORT}" "http://localhost:${NODE_PORT}" 2>/dev/null \
+        || warn "tailscale serve failed — run manually: sudo tailscale serve --bg --https=${NODE_PORT} http://localhost:${NODE_PORT}"
+      SPINNY_SERVE_URL="https://${TS_HOSTNAME}:${NODE_PORT}"
+      grep -v '^SPINNY_SERVE_URL=' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
+      echo "SPINNY_SERVE_URL=${SPINNY_SERVE_URL}" >> "$ENV_FILE"
+      # Restart node so it picks up the new SPINNY_SERVE_URL
+      systemctl --user restart "$SERVICE_NAME" 2>/dev/null || true
+      ok "HTTPS proxy ready: ${SPINNY_SERVE_URL}"
+      TAILSCALE_STR="● Connected  •  ${TAILSCALE_IP}  •  ${SPINNY_SERVE_URL}"
+    else
+      warn "Could not read Tailscale hostname — skipping tailscale serve"
+      TAILSCALE_STR="● Connected  •  ${TAILSCALE_IP}"
     fi
   else
-    warn "Tailscale installed but not authenticated — run: sudo tailscale up"
-    TAILSCALE_STR="○ Installed — run: sudo tailscale up"
+    warn "Tailscale not authenticated — run: sudo tailscale up"
+    warn "Then run: sudo tailscale serve --bg --https=${NODE_PORT} http://localhost:${NODE_PORT}"
+    TAILSCALE_STR="○ Not connected — run: sudo tailscale up"
   fi
 else
   if command -v tailscale &>/dev/null; then
