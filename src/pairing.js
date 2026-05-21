@@ -1,6 +1,8 @@
 import { execSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { ensureNodeIdentity, signJson } from "./identity.js";
 import { loadState, saveState } from "./state.js";
+import { getSystemInfo } from "./system-info.js";
 
 function gitFingerprint() {
   try {
@@ -86,5 +88,106 @@ export async function pairNode({ token, controlUrl = process.env.SPINNY_CONTROL_
     controlPlanePublicKey: result.controlPlanePublicKey || null,
     relayUrl: result.relayUrl || null,
     controlUrl: controlUrl || null,
+  });
+}
+
+export async function requestPairing({ targetEmail, controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au" }) {
+  const email = String(targetEmail || "").toLowerCase().trim();
+  if (!email || !email.includes("@")) throw new Error("Valid email is required");
+
+  const identity = ensureNodeIdentity();
+  const state = saveState(loadState());
+  const health = getSystemInfo();
+  const requestId = `preq_${randomBytes(18).toString("base64url")}`;
+  const payload = {
+    type: "node.pairing_request",
+    requestId,
+    targetEmail: email,
+    nodeId: state.nodeId,
+    nodeName: state.nodeName || health.nodeName || null,
+    hostname: health.hostname || null,
+    nodePublicKey: identity.publicKeyDer,
+    health,
+    client: "spinny-local-minimal",
+    version: "0.1.0",
+    issuedAt: new Date().toISOString(),
+    ...gitFingerprint(),
+  };
+  const signature = signJson(identity.privateKey, payload);
+  const base = controlUrl.replace(/\/$/, "");
+
+  const response = await fetch(`${base}/api/spinny/pairing/requests`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ payload, signature }),
+    signal: AbortSignal.timeout(12000),
+  });
+  const body = await response.json().catch(async () => ({ error: await response.text().catch(() => "") }));
+  if (!response.ok) {
+    throw new Error(`Pairing request failed: ${response.status} ${body.error || JSON.stringify(body)}`);
+  }
+
+  saveState({
+    ...state,
+    pairingRequestId: requestId,
+    pairingRequestEmail: email,
+    pairingRequestIssuedAt: Date.now(),
+    pairingRequestExpiresAt: body.expiresAt || null,
+    nodePublicKey: identity.publicKeyDer,
+    controlUrl: base,
+  });
+
+  return {
+    ok: true,
+    requestId,
+    targetEmail: email,
+    nodeId: state.nodeId,
+    expiresAt: body.expiresAt || null,
+  };
+}
+
+export async function getPairingRequestStatus({
+  requestId,
+  nodeId,
+  controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au",
+}) {
+  if (!requestId || !nodeId) return { waiting: false, expired: true };
+  const base = controlUrl.replace(/\/$/, "");
+  const url = `${base}/api/spinny/pairing/requests/status?requestId=${encodeURIComponent(requestId)}&nodeId=${encodeURIComponent(nodeId)}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  const body = await response.json().catch(async () => ({ error: await response.text().catch(() => "") }));
+  if (!response.ok) throw new Error(`Pairing request poll failed: ${response.status} ${body.error || JSON.stringify(body)}`);
+  return body;
+}
+
+export function applyPairingRequestApproval(body, controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au") {
+  const state = loadState();
+  const identity = ensureNodeIdentity();
+  const accountEmail = String(body.accountEmail || "").toLowerCase().trim();
+  const relaySessionToken = String(body.relaySessionToken || "");
+  const relaySessionExpires = Number(body.relaySessionExpires || 0);
+  if (!accountEmail || !accountEmail.includes("@")) throw new Error("Pairing approval is missing account email");
+  if (!relaySessionToken || !relaySessionExpires) throw new Error("Pairing approval is missing relay session");
+
+  const existingUsers = Array.isArray(state.allowedUsers) ? state.allowedUsers : [];
+  const hasUser = existingUsers.some((u) => u?.email === accountEmail);
+  return saveState({
+    ...state,
+    paired: true,
+    accountId: accountEmail,
+    pairedAt: new Date().toISOString(),
+    relaySessionToken,
+    relaySessionExpiresAt: new Date(relaySessionExpires * 1000).toISOString(),
+    nodePublicKey: identity.publicKeyDer,
+    controlPlanePublicKey: body.controlPlanePublicKey || null,
+    relayUrl: body.relayUrl || null,
+    controlUrl: controlUrl.replace(/\/$/, ""),
+    pairingRequestId: null,
+    pairingRequestEmail: null,
+    pairingRequestIssuedAt: null,
+    pairingRequestExpiresAt: null,
+    allowedUsers: hasUser
+      ? existingUsers
+      : [{ email: accountEmail, role: existingUsers.length ? "member" : "owner", addedAt: new Date().toISOString() }, ...existingUsers],
   });
 }

@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process'
 import qrcode from 'qrcode-terminal'
 import { ensureNodeIdentity } from "./identity.js";
 import { ensureVaultKey, Vault } from "./vault.js";
-import { pairNode, pairNodeDirect } from "./pairing.js";
+import { pairNode, pairNodeDirect, requestPairing, getPairingRequestStatus, applyPairingRequestApproval } from "./pairing.js";
 import { RelayClient, startHealthPush } from "./relay.js";
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
@@ -42,6 +42,11 @@ try {
       nodeId: state.nodeId,
       accountId: state.accountId
     }, null, 2));
+
+  } else if (command === "pairme2") {
+    const email = process.argv[3] || readFlag("--email");
+    const result = await requestPairing({ targetEmail: email });
+    console.log(JSON.stringify(result, null, 2));
 
   } else if (command === "start") {
     ensureNodeIdentity();
@@ -151,9 +156,47 @@ try {
       const pollTimer = setInterval(async () => {
         pollCount++
         try {
-          const { pairingCode: currentCode, nodeId: currentNodeId } = loadState()
-          if (!currentCode) { console.log('[relay-pair] poll: no code in state'); return }
+          const currentState = loadState()
+          const {
+            pairingCode: currentCode,
+            nodeId: currentNodeId,
+            pairingRequestId,
+            pairingRequestEmail,
+          } = currentState
           const logPoll = pollCount === 1 || pollCount % 12 === 0
+          if (pairingRequestId) {
+            if (logPoll) {
+              console.log(`[pairme2] poll #${pollCount} request=${String(pairingRequestId).slice(0, 12)}... email=${pairingRequestEmail || 'unknown'}`)
+            }
+            const requestStatus = await getPairingRequestStatus({
+              requestId: pairingRequestId,
+              nodeId: currentNodeId,
+              controlUrl,
+            })
+            if (logPoll || requestStatus.approved || requestStatus.rejected || requestStatus.expired) {
+              console.log(`[pairme2] poll #${pollCount} ->`, JSON.stringify(requestStatus))
+            }
+            if (requestStatus.approved && requestStatus.relaySessionToken) {
+              pairingClaimSeen = true
+              clearInterval(rotateTimer)
+              clearInterval(pollTimer)
+              const newState = applyPairingRequestApproval(requestStatus, controlUrl)
+              console.log(`[pairme2] APPROVED by ${newState.accountId} - paired! nodeId=${newState.nodeId}`)
+              pairingResolver?.(newState)
+              return
+            }
+            if (requestStatus.rejected || requestStatus.expired) {
+              saveState({
+                ...loadState(),
+                pairingRequestId: null,
+                pairingRequestEmail: null,
+                pairingRequestIssuedAt: null,
+                pairingRequestExpiresAt: null,
+              })
+              console.log(`[pairme2] request ${requestStatus.rejected ? 'rejected' : 'expired'} - continuing code pairing`)
+            }
+          }
+          if (!currentCode) { console.log('[relay-pair] poll: no code in state'); return }
           if (logPoll) console.log(`[relay-pair] poll #${pollCount} code=${currentCode} nodeId=${currentNodeId.slice(0,8)}…`)
           const r = await fetch(
             `${controlUrl}/api/spinny/pairing/status?code=${currentCode}&nodeId=${currentNodeId}`,

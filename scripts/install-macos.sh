@@ -222,6 +222,51 @@ gen_pairing_code() {
   echo "\$code"
 }
 
+request_pairme2() {
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is required to send a pairing request"
+    return 1
+  fi
+  local email="\${1:-}"
+  if [[ -z "\$email" || "\$email" != *@* ]]; then
+    echo "Usage: spinny pairme2 email@example.com"
+    return 1
+  fi
+  local token=""
+  if [[ -f "\$ENV_FILE" ]]; then
+    token=\$(grep -E '^SPINNY_DASHBOARD_TOKEN=' "\$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r"')
+  fi
+  local payload
+  payload=\$(node -e 'process.stdout.write(JSON.stringify({email:process.argv[1]}))' "\$email")
+  local args=(-sS -X POST -H "Content-Type: application/json")
+  [[ -n "\$token" ]] && args+=(-H "Cookie: spinny_dash=\$token")
+  local body
+  body=\$(curl "\${args[@]}" --data "\$payload" "http://localhost:47821/pairing/request" 2>/dev/null || true)
+  local parsed
+  parsed=\$(printf '%s' "\$body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d); if(j.requestId) console.log([j.requestId,j.targetEmail||'',j.nodeId||'',j.expiresAt||''].join('\\t')); else if(j.error) console.error(j.error)}catch{}})" 2>/tmp/spinny-pairme2.err)
+  if [[ -z "\$parsed" && -f "\$INSTALL_DIR/src/main.js" ]]; then
+    body=\$(cd "\$INSTALL_DIR" && node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js pairme2 "\$email" 2>/tmp/spinny-pairme2.err || true)
+    parsed=\$(printf '%s' "\$body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d); if(j.requestId) console.log([j.requestId,j.targetEmail||'',j.nodeId||'',j.expiresAt||''].join('\\t'))}catch{}})" 2>/dev/null)
+  fi
+  if [[ -z "\$parsed" ]]; then
+    echo "Could not send pairing request. Is the node running?"
+    if [[ -s /tmp/spinny-pairme2.err ]]; then cat /tmp/spinny-pairme2.err; fi
+    [[ -n "\$body" ]] && echo "\$body"
+    return 1
+  fi
+  IFS=\$'\t' read -r request_id target_email node_id expires_at <<< "\$parsed"
+  echo "Pairing request sent to \$target_email"
+  echo "Request: \$request_id"
+  echo "Node: \$node_id"
+  [[ -n "\$expires_at" ]] && echo "Expires: \$expires_at"
+  echo "Open spinny.au -> Settings -> Local Node -> Pairing Requests, then click Pair."
+}
+
+if [[ "\${1:-}" == "pairme2" || "\${1:-}" == "pairme" || "\${1:-}" == "requestpair" ]]; then
+  request_pairme2 "\${2:-}"
+  exit \$?
+fi
+
 CLI_CMD="\${*:-help}"
 
 case "\$CLI_CMD" in
@@ -263,6 +308,7 @@ case "\$CLI_CMD" in
     echo "  spinny --fresh    Wipe state and reinstall (re-pairs)"
     echo "  spinny version    Show installed version"
     echo "  spinny pairing code    Show current pairing code"
+    echo "  spinny pairme2 email   Request pairing from spinny.au"
     echo "  spinny genpairingcode  Generate a fresh pairing code"
     echo "  spinny sendhealth      Push current health to spinny.au"
     echo "  spinny status     Show service status"

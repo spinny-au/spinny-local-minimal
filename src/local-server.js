@@ -228,7 +228,7 @@ async function regeneratePairingCode() {
 }
 import { loadState, saveState, generatePairingCode } from './state.js'
 import { ensureNodeIdentity } from './identity.js'
-import { pairNodeDirect } from './pairing.js'
+import { pairNodeDirect, requestPairing } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
 import { getLines } from './log-buffer.js'
 import { Vault } from './vault.js'
@@ -1031,6 +1031,18 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       if (!isDashboardAuthed(req)) return json(res, { error: 'unauthorized' }, 401)
       const result = await regeneratePairingCode()
       return json(res, result, result.advertised?.ok ? 200 : 502)
+    }
+
+    if (url.pathname === '/pairing/request' && req.method === 'POST') {
+      if (!isDashboardAuthed(req)) return json(res, { error: 'unauthorized' }, 401)
+      try {
+        const body = await readJsonBody(req)
+        const email = String(body.email || body.targetEmail || '').toLowerCase().trim()
+        const result = await requestPairing({ targetEmail: email })
+        return json(res, result)
+      } catch (err) {
+        return json(res, { error: err.message || 'pairing request failed' }, err.status || 400)
+      }
     }
 
     // Admin config — dashboard auth required
