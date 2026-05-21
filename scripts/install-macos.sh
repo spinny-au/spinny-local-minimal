@@ -172,6 +172,55 @@ PLIST="$SPINNY_PLIST"
 SERVICE_LABEL="$SPINNY_SERVICE_LABEL"
 INSTALL_DIR="$SPINNY_INSTALL_DIR"
 INSTALL_SCRIPT="$SPINNY_INSTALL_SCRIPT"
+ENV_FILE="\$INSTALL_DIR/.env"
+
+state_file() {
+  local home_dir="\${SPINNY_HOME:-\$HOME/.spinny-local}"
+  if [[ -f "\$ENV_FILE" ]]; then
+    local env_home
+    env_home=\$(grep -E '^SPINNY_HOME=' "\$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r"')
+    [[ -n "\$env_home" ]] && home_dir="\$env_home"
+  fi
+  echo "\$home_dir/state.json"
+}
+
+print_pairing_code() {
+  local file="\$(state_file)"
+  if [[ ! -f "\$file" ]]; then
+    echo "No pairing code found. State file missing: \$file"
+    return 1
+  fi
+  local code
+  code=\$(node -e "const fs=require('fs');try{const s=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if (s.pairingCode) console.log(s.pairingCode)}catch{}" "\$file" 2>/dev/null)
+  if [[ -z "\$code" ]]; then
+    echo "No pairing code found in \$file"
+    return 1
+  fi
+  echo "\$code"
+}
+
+gen_pairing_code() {
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is required to regenerate a pairing code"
+    return 1
+  fi
+  local token=""
+  if [[ -f "\$ENV_FILE" ]]; then
+    token=\$(grep -E '^SPINNY_DASHBOARD_TOKEN=' "\$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r"')
+  fi
+  local args=(-sS -X POST)
+  [[ -n "\$token" ]] && args+=(-H "Cookie: spinny_dash=\$token")
+  local body
+  body=\$(curl "\${args[@]}" "http://localhost:47821/pairing/token/regenerate" 2>/dev/null || true)
+  local code
+  code=\$(printf '%s' "\$body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d); if (j.code) console.log(j.code)}catch{}})" 2>/dev/null)
+  if [[ -z "\$code" ]]; then
+    echo "Could not regenerate pairing code. Is the node running?"
+    [[ -n "\$body" ]] && echo "\$body"
+    return 1
+  fi
+  echo "\$code"
+}
 
 case "\${1:-help}" in
   --update|update)
@@ -190,10 +239,24 @@ case "\${1:-help}" in
     launchctl unload "\$PLIST" 2>/dev/null && echo "Stopped." ;;
   start)
     launchctl load "\$PLIST" && echo "Started." ;;
+  version|--version|-v)
+    if [[ -f "\$INSTALL_DIR/package.json" ]]; then
+      node -e "console.log(require(process.argv[1]).version)" "\$INSTALL_DIR/package.json" 2>/dev/null \
+        || grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "\$INSTALL_DIR/package.json" | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
+    else
+      echo "unknown"
+    fi ;;
+  pairingcode)
+    print_pairing_code ;;
+  genpairingcode)
+    gen_pairing_code ;;
   help|--help|-h|*)
     echo "Usage: spinny <command>"
     echo "  spinny --update   Pull latest code and restart"
     echo "  spinny --fresh    Wipe state and reinstall (re-pairs)"
+    echo "  spinny version    Show installed version"
+    echo "  spinny pairingcode     Show current pairing code"
+    echo "  spinny genpairingcode  Generate a fresh pairing code"
     echo "  spinny status     Show service status"
     echo "  spinny logs       Tail the node log"
     echo "  spinny restart    Restart the service"
