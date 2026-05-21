@@ -215,16 +215,27 @@ ok "Service started (runs at login)"
 # ── 9. Wait for pairing code ──────────────────────────────────────────────────
 step "Waiting for node to initialise"
 STATE_FILE="$STATE_DIR/state.json"
+LOG_FILE="$INSTALL_DIR/spinny-local.log"
 PAIRING_CODE=""; PAIRED=false
 for i in $(seq 1 60); do
   sleep 1
-  [[ ! -f "$STATE_FILE" ]] && continue
-  CODE=$(grep -oP '(?<="pairingCode":")[^"]+' "$STATE_FILE" 2>/dev/null || true)
-  IS_PAIRED=$(grep -oP '(?<="paired":)true' "$STATE_FILE" 2>/dev/null || true)
-  [[ -n "$IS_PAIRED" ]] && PAIRED=true && break
-  [[ -n "$CODE" ]] && PAIRING_CODE="$CODE" && break
+  # Check if already paired
+  if [[ -f "$STATE_FILE" ]]; then
+    IS_PAIRED=$(grep -oP '(?<="paired":)true' "$STATE_FILE" 2>/dev/null || true)
+    [[ -n "$IS_PAIRED" ]] && PAIRED=true && break
+  fi
+  # Read code from log (most reliable — shows what node is actively advertising)
+  if [[ -f "$LOG_FILE" ]]; then
+    LAST_AD=$(grep -oP '\[relay-pair\] advertise \K[A-Z0-9]+(?= ->)' "$LOG_FILE" 2>/dev/null | tail -1 || true)
+    [[ -n "$LAST_AD" ]] && PAIRING_CODE="$LAST_AD" && break
+  fi
+  # Fallback: read from state.json
+  if [[ -f "$STATE_FILE" ]]; then
+    CODE=$(grep -oP '(?<="pairingCode":")[^"]+' "$STATE_FILE" 2>/dev/null || true)
+    [[ -n "$CODE" ]] && PAIRING_CODE="$CODE"
+  fi
 done
-[[ -z "$PAIRING_CODE" && "$PAIRED" == "false" ]] && PAIRING_CODE="run: journalctl --user -u ${SERVICE_NAME} -n 50"
+[[ -z "$PAIRING_CODE" && "$PAIRED" == "false" ]] && PAIRING_CODE="check: cat $STATE_FILE | python3 -m json.tool | grep pairingCode"
 
 # ── 10. Tailscale ─────────────────────────────────────────────────────────────
 TAILSCALE_STR="Not installed"
@@ -365,8 +376,12 @@ echo ""
 if $PAIRED; then
   printf "  %-18s: already paired ✓\n" "Pairing"
 else
-  printf "  %-18s: %s\n" "Pairing code" "$PAIRING_CODE"
-  echo -e "                       ${DIM}Enter this at spinny.au → Settings → Local Node${RST}"
+  echo ""
+  echo -e "${Y}${B}╔══════════════════════════════════════╗${RST}"
+  echo -e "${Y}${B}║   PAIRING CODE  →   ${PAIRING_CODE}           ║${RST}"
+  echo -e "${Y}${B}╚══════════════════════════════════════╝${RST}"
+  echo -e "  Enter ${B}${PAIRING_CODE}${RST} at ${B}spinny.au${RST} → Settings → Local Node"
+  echo ""
 fi
 echo ""
 printf "  %-18s: " "Dashboard token"
