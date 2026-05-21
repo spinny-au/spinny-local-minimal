@@ -90,8 +90,9 @@ try {
         const s = loadState()
         if (pairingClaimSeen) return
         if (!needsMorePairings(s)) return
-        const code = generatePairingCode()
-        saveState({ ...s, pairingCode: code, pairingCodeIssuedAt: Date.now() })
+        const codeAge = s.pairingCode && s.pairingCodeIssuedAt ? Date.now() - s.pairingCodeIssuedAt : Infinity
+        const code = codeAge < ROTATE_MS && s.pairingCode ? s.pairingCode : generatePairingCode()
+        saveState({ ...s, pairingCode: code, pairingCodeIssuedAt: s.pairingCodeIssuedAt && codeAge < ROTATE_MS ? s.pairingCodeIssuedAt : Date.now() })
         const identity = ensureNodeIdentity()
         try {
           const r = await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
@@ -106,7 +107,7 @@ try {
         }
       }
 
-      // Fresh code on startup — always regenerate, stale codes are expired in cloud DB
+      // Reuse existing code if still fresh, otherwise generate new one
       await rotateCode()
       state = loadState()
       const rotateTimer = setInterval(rotateCode, ROTATE_MS)
