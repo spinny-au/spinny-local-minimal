@@ -25,9 +25,25 @@ function refreshOllamaCache() {
   }
 }
 
+// Cache GPU name — expensive to detect, changes never
+let gpuCache = 'Not detected'
+function detectGpu() {
+  try {
+    const out = execSync('nvidia-smi --query-gpu=name --format=csv,noheader', { timeout: 3000, stdio: 'pipe' }).toString().trim()
+    if (out) { gpuCache = out.split('\n')[0].trim(); return }
+  } catch {}
+  try {
+    const out = execSync('wmic path win32_VideoController get name /value', { timeout: 3000, stdio: 'pipe' }).toString()
+    const match = out.match(/Name=(.+)/)
+    if (match) gpuCache = match[1].trim()
+  } catch {}
+}
+
 // Warm the cache immediately on import, then refresh every 30s
 refreshOllamaCache()
 setInterval(refreshOllamaCache, 30_000).unref()
+// GPU detection runs once in background — don't block startup
+setImmediate(detectGpu)
 
 function readCpuSample() {
   const cpus = os.cpus()
@@ -63,17 +79,7 @@ export function getSystemInfo() {
   const totalMem = os.totalmem()
   const freeMem = os.freemem()
 
-  let gpu = 'Not detected'
-  try {
-    const out = execSync('nvidia-smi --query-gpu=name --format=csv,noheader', { timeout: 3000, stdio: 'pipe' }).toString().trim()
-    if (out) gpu = out.split('\n')[0].trim()
-  } catch {
-    try {
-      const out = execSync('wmic path win32_VideoController get name /value', { timeout: 3000, stdio: 'pipe' }).toString()
-      const match = out.match(/Name=(.+)/)
-      if (match) gpu = match[1].trim()
-    } catch {}
-  }
+  const gpu = gpuCache
 
   let disk = { free: 0, total: 0 }
   try {

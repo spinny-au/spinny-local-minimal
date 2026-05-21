@@ -420,10 +420,10 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       res.writeHead(204); return res.end()
     }
 
-    // Health (used by spinny.au browser fetch)
+    // Health (used by spinny.au browser fetch) — must respond instantly, no heavy calls
     if (url.pathname === '/health') {
       const state = loadState()
-      return json(res, { ok: true, nodeId: state.nodeId, paired: state.paired, health: getSystemInfo() })
+      return json(res, { ok: true, nodeId: state.nodeId, paired: state.paired })
     }
 
     // API status
