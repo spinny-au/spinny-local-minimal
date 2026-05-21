@@ -152,54 +152,71 @@ ok ".env written (node name: ${NODE_NAME_ENV})"
 
 # ── 8. spinny CLI wrapper ─────────────────────────────────────────────────────
 step "Installing spinny CLI"
-CLI_DIR="$HOME/.local/bin"
-mkdir -p "$CLI_DIR"
-cat > "$CLI_DIR/spinny" <<'SPINNY_CLI'
-#!/usr/bin/env bash
-# spinny CLI — manage your Spinny local node
-PLIST="$HOME/Library/LaunchAgents/au.spinny.local-node.plist"
-SERVICE_LABEL="au.spinny.local-node"
-INSTALL_DIR="$HOME/.spinny/node"
-INSTALL_SCRIPT="https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/install-macos.sh"
+# Prefer /usr/local/bin (always on PATH); fall back to ~/.local/bin.
+if [[ "$EUID" -eq 0 ]] || { command -v sudo &>/dev/null && sudo -n true 2>/dev/null; }; then
+  CLI_DIR="/usr/local/bin"
+else
+  CLI_DIR="$HOME/.local/bin"
+  mkdir -p "$CLI_DIR"
+fi
 
-case "${1:-help}" in
+SPINNY_PLIST="$HOME/Library/LaunchAgents/au.spinny.local-node.plist"
+SPINNY_SERVICE_LABEL="au.spinny.local-node"
+SPINNY_INSTALL_DIR="$HOME/.spinny/node"
+SPINNY_INSTALL_SCRIPT="https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/install-macos.sh"
+
+CLI_WRAPPER="$(mktemp)"
+cat > "$CLI_WRAPPER" <<SPINNY_CLI
+#!/usr/bin/env bash
+PLIST="$SPINNY_PLIST"
+SERVICE_LABEL="$SPINNY_SERVICE_LABEL"
+INSTALL_DIR="$SPINNY_INSTALL_DIR"
+INSTALL_SCRIPT="$SPINNY_INSTALL_SCRIPT"
+
+case "\${1:-help}" in
   --update|update)
     echo "Updating Spinny local node..."
-    bash <(curl -fsSL "$INSTALL_SCRIPT") --update ;;
+    bash <(curl -fsSL "\$INSTALL_SCRIPT") --update ;;
   --fresh|fresh)
     echo "Fresh install (wipes state)..."
-    bash <(curl -fsSL "$INSTALL_SCRIPT") --fresh ;;
+    bash <(curl -fsSL "\$INSTALL_SCRIPT") --fresh ;;
   status)
-    launchctl list "$SERVICE_LABEL" ;;
+    launchctl list "\$SERVICE_LABEL" ;;
   logs)
-    tail -f "$INSTALL_DIR/spinny-local.log" ;;
+    tail -f "\$INSTALL_DIR/spinny-local.log" ;;
   restart)
-    launchctl unload "$PLIST" 2>/dev/null; launchctl load "$PLIST" && echo "Restarted." ;;
+    launchctl unload "\$PLIST" 2>/dev/null; launchctl load "\$PLIST" && echo "Restarted." ;;
   stop)
-    launchctl unload "$PLIST" 2>/dev/null && echo "Stopped." ;;
+    launchctl unload "\$PLIST" 2>/dev/null && echo "Stopped." ;;
   start)
-    launchctl load "$PLIST" && echo "Started." ;;
+    launchctl load "\$PLIST" && echo "Started." ;;
   help|--help|-h|*)
     echo "Usage: spinny <command>"
-    echo ""
     echo "  spinny --update   Pull latest code and restart"
     echo "  spinny --fresh    Wipe state and reinstall (re-pairs)"
     echo "  spinny status     Show service status"
     echo "  spinny logs       Tail the node log"
     echo "  spinny restart    Restart the service"
-    echo "  spinny start      Start the service"
-    echo "  spinny stop       Stop the service" ;;
+    echo "  spinny start / stop" ;;
 esac
 SPINNY_CLI
-chmod +x "$CLI_DIR/spinny"
 
-# Ensure ~/.local/bin is on PATH
-for RC in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.zprofile"; do
-  [[ -f "$RC" ]] || continue
-  grep -q '.local/bin' "$RC" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$RC"
-done
-export PATH="$HOME/.local/bin:$PATH"
-ok "spinny CLI installed — run 'spinny --update' to update in future"
+if [[ "$CLI_DIR" == "/usr/local/bin" && "$EUID" -ne 0 ]]; then
+  sudo install -m 755 "$CLI_WRAPPER" "$CLI_DIR/spinny"
+else
+  install -m 755 "$CLI_WRAPPER" "$CLI_DIR/spinny"
+fi
+rm -f "$CLI_WRAPPER"
+
+# Also ensure ~/.local/bin is on PATH for non-root fallback
+if [[ "$CLI_DIR" != "/usr/local/bin" ]]; then
+  for RC in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile"; do
+    [[ -f "$RC" ]] || continue
+    grep -q '.local/bin' "$RC" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$RC"
+  done
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+ok "spinny CLI installed at $CLI_DIR/spinny"
 
 # ── 10. launchd service ───────────────────────────────────────────────────────
 step "Installing launchd service"

@@ -86,13 +86,14 @@ try {
         return (s.allowedUsers?.length || 0) < (s.maxPairedAccounts || 1)
       }
 
-      async function rotateCode() {
+      async function rotateCode({ force = false, reason = '' } = {}) {
         const s = loadState()
         if (pairingClaimSeen) return
         if (!needsMorePairings(s)) return
         const codeAge = s.pairingCode && s.pairingCodeIssuedAt ? Date.now() - s.pairingCodeIssuedAt : Infinity
-        const code = codeAge < ROTATE_MS && s.pairingCode ? s.pairingCode : generatePairingCode()
-        saveState({ ...s, pairingCode: code, pairingCodeIssuedAt: s.pairingCodeIssuedAt && codeAge < ROTATE_MS ? s.pairingCodeIssuedAt : Date.now() })
+        const reuseExisting = !force && codeAge < ROTATE_MS && s.pairingCode
+        const code = reuseExisting ? s.pairingCode : generatePairingCode()
+        saveState({ ...s, pairingCode: code, pairingCodeIssuedAt: reuseExisting ? s.pairingCodeIssuedAt : Date.now() })
         const identity = ensureNodeIdentity()
         try {
           const r = await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
@@ -101,7 +102,7 @@ try {
             body: JSON.stringify({ pairingCode: code, nodeId: s.nodeId, nodePublicKey: identity.publicKeyDer }),
             signal: AbortSignal.timeout(8000),
           })
-          console.log(`[relay-pair] advertise ${code} -> ${r.status}`)
+          console.log(`[relay-pair] advertise ${code} -> ${r.status}${reason ? ` (${reason})` : ''}`)
         } catch (err) {
           console.error('[relay-pair] advertise failed:', err.message)
         }
@@ -163,7 +164,11 @@ try {
             console.log(`[relay-pair] poll #${pollCount} → HTTP ${r.status}`, JSON.stringify(body))
           }
           if (!r.ok) { console.error('[relay-pair] poll error:', r.status, body); return; }
-          if (body.expired) { console.log('[relay-pair] code expired on cloud — waiting for rotation'); return; }
+          if (body.expired) {
+            console.log('[relay-pair] code expired on cloud — forcing a fresh pairing code now')
+            await rotateCode({ force: true, reason: 'cloud expired' })
+            return
+          }
           if (body.waiting) {
             if (logPoll) console.log('[relay-pair] waiting for user to enter code')
             return
