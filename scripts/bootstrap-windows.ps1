@@ -7,7 +7,7 @@
 # Update only (keeps pairing):
 #   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/bootstrap-windows.ps1'))) --update
 
-$INSTALLER_VERSION = '2026-05-21.5'
+$INSTALLER_VERSION = '2026-05-21.6'
 
 $isFresh  = $args -contains '--fresh'  -or $args -contains '-fresh'
 $isUpdate = $args -contains '--update' -or $args -contains '-update'
@@ -197,11 +197,27 @@ SPINNY_ALLOW_INSECURE_FILE_KEY=1
 [System.IO.File]::WriteAllText($envFile, $envContent, [System.Text.UTF8Encoding]::new($false))
 ok '.env written'
 
-# ── 8. Desktop shortcut ───────────────────────────────────────────────────────
-$shortcutPath = "$env:USERPROFILE\Desktop\Spinny Local.url"
-"[InternetShortcut]`r`nURL=http://localhost:$NODE_PORT`r`n" |
-    Out-File -Encoding ascii $shortcutPath -EA SilentlyContinue
-ok 'Desktop shortcut → http://localhost:47821'
+# ── 8. Desktop shortcut — starts node if stopped, then opens browser ──────────
+$launchScript = "$INSTALL_DIR\launch.ps1"
+[System.IO.File]::WriteAllText($launchScript, @"
+`$taskName = 'SpinnyLocalNode'
+`$state = (Get-ScheduledTask -TaskName `$taskName -EA SilentlyContinue).State
+if (`$state -ne 'Running') { Start-ScheduledTask -TaskName `$taskName -EA SilentlyContinue }
+Start-Sleep 2
+Start-Process "http://localhost:$NODE_PORT"
+"@, [System.Text.UTF8Encoding]::new($false))
+
+$shortcutPath = "$env:USERPROFILE\Desktop\Spinny Local.lnk"
+Remove-Item "$env:USERPROFILE\Desktop\Spinny Local.url" -EA SilentlyContinue
+$wsh = New-Object -ComObject WScript.Shell
+$lnk = $wsh.CreateShortcut($shortcutPath)
+$lnk.TargetPath      = 'powershell.exe'
+$lnk.Arguments       = "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -NoProfile -File `"$launchScript`""
+$lnk.WorkingDirectory = $INSTALL_DIR
+$lnk.WindowStyle     = 7   # minimised / hidden
+$lnk.Description     = 'Start Spinny Local Node and open dashboard'
+$lnk.Save()
+ok 'Desktop shortcut created — double-click to start node + open dashboard'
 
 # ── 9. Task Scheduler (auto-start, hidden, restarts on failure) ───────────────
 step 'Registering auto-start (Task Scheduler)'
