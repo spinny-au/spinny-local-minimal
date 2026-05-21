@@ -10,7 +10,8 @@ import { RelayClient } from "./relay.js";
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
 import { startLocalServer } from "./local-server.js";
-import { startSubagentScheduler } from "./subagent-scheduler.js";
+import { startSubagentScheduler } from "./subagent-scheduler.js"
+import { startRelayInfer } from "./relay-infer.js";
 import { startTray } from "./tray.js";
 
 const command = process.argv[2] || "start";
@@ -73,6 +74,7 @@ try {
     // Start autonomous sub-agent scheduler
     const { monitorEmails, executeEmailAction, sendTelegramNotification, formatTelegramNotification } = await import('./email-vertical.js')
     startSubagentScheduler({ monitorEmails, executeEmailAction, sendTelegramNotification, formatTelegramNotification })
+    startRelayInfer()
 
     if (!state.paired) {
       const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
