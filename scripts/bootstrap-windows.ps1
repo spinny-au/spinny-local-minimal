@@ -102,24 +102,54 @@ if ($isUpdate -and -not (Test-Path "$INSTALL_DIR\.git")) {
     fail "No existing install at $INSTALL_DIR — run without --update to install first"
 }
 
-# ── 5. Clone / pull ───────────────────────────────────────────────────────────
+# ── 5. Kill any old node process on port 47821 ────────────────────────────────
+step 'Stopping any running Spinny processes'
+Stop-Node
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -EA SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*tray-windows.ps1*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+# Also kill anything holding port 47821
+$portPid = (netstat -ano 2>$null | Select-String ":47821\s") -replace '.*\s(\d+)$','$1' | Select-Object -First 1
+if ($portPid -and $portPid -match '^\d+$') {
+    Stop-Process -Id ([int]$portPid) -Force -EA SilentlyContinue
+    Start-Sleep 1
+}
+ok 'Old processes stopped'
+
+# ── 6. Clone / pull ───────────────────────────────────────────────────────────
 step 'Setting up Spinny Local Node'
 if (Test-Path "$INSTALL_DIR\.git") {
-    Stop-Node
     git -C $INSTALL_DIR pull --ff-only
+    if ($LASTEXITCODE -ne 0) { fail "git pull failed — run with --fresh to do a clean install" }
     ok 'Updated to latest'
 } else {
+    # Wipe any partial/broken install before cloning
+    if (Test-Path $INSTALL_DIR) {
+        warn "Install directory exists but has no .git — wiping partial install"
+        & cmd /c "rmdir /s /q `"$INSTALL_DIR`"" 2>$null
+        Start-Sleep 1
+    }
     New-Item -ItemType Directory -Force -Path (Split-Path $INSTALL_DIR) | Out-Null
     git clone $REPO_URL $INSTALL_DIR
+    if ($LASTEXITCODE -ne 0) { fail "git clone failed — check your internet connection and try again" }
     ok 'Cloned'
 }
 
-# ── 6. Dependencies ───────────────────────────────────────────────────────────
+# Verify critical files are present before continuing
+if (-not (Test-Path "$INSTALL_DIR\src\main.js")) {
+    fail "Clone appears incomplete — src/main.js missing. Run the installer again."
+}
+if (-not (Test-Path "$INSTALL_DIR\ui\dist\index.html")) {
+    fail "Clone appears incomplete — ui/dist/index.html missing. Run the installer again."
+}
+
+# ── 7. Dependencies ───────────────────────────────────────────────────────────
 step 'Installing npm dependencies'
 npm install --prefix $INSTALL_DIR --omit=dev --silent
+if ($LASTEXITCODE -ne 0) { fail "npm install failed" }
 ok 'Dependencies ready'
 
-# ── 7. .env ───────────────────────────────────────────────────────────────────
+# ── 8. .env ───────────────────────────────────────────────────────────────────
 step 'Writing .env'
 $envFile   = "$INSTALL_DIR\.env"
 $dashToken = ''
