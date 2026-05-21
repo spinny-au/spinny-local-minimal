@@ -113,6 +113,8 @@ export function getSystemInfo() {
     if (tsOut && /^\d+\.\d+\.\d+\.\d+$/.test(tsOut)) tailscaleIp = tsOut
   } catch {}
 
+  const serveUrl = process.env.SPINNY_SERVE_URL || null
+
   return {
     hostname: os.hostname(),
     platform: os.platform(),
@@ -126,6 +128,7 @@ export function getSystemInfo() {
     models: ollamaModels,
     loadedModel,
     tailscaleIp,
+    serveUrl,
     capabilities: {
       modelInstall: true,
       modelBundleExport: true,
