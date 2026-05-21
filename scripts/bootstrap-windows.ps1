@@ -7,6 +7,8 @@
 # Update only (keeps pairing):
 #   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/bootstrap-windows.ps1'))) --update
 
+$INSTALLER_VERSION = '2026-05-21.1'
+
 $isFresh  = $args -contains '--fresh'  -or $args -contains '-fresh'
 $isUpdate = $args -contains '--update' -or $args -contains '-update'
 
@@ -299,6 +301,7 @@ Write-Host "${DIM}$LINE${RST}"
 for ($i = 0; $i -lt $LOGO.Length; $i++) { Write-Host "$($COLS[$i % 6])$($LOGO[$i])${RST}" }
 Write-Host "${DIM}$LINE${RST}"
 Write-Host "  🚀  ${B}SPINNY LOCAL NODE  v$pkgVer  SUCCESSFULLY INSTALLED${RST}  🚀"
+Write-Host "  ${DIM}Installer script: $INSTALLER_VERSION${RST}"
 Write-Host "${DIM}$('-'*68)${RST}"
 Write-Host ''
 Write-Host ('  {0,-18}: {1} vCPUs  •  {2} GB RAM  •  {3}  •  {4} GB free' -f 'Hardware', $cpu, $ramGB, $gpu, $diskFree)
