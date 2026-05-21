@@ -149,16 +149,22 @@ try {
         try {
           const { pairingCode: currentCode, nodeId: currentNodeId } = loadState()
           if (!currentCode) { console.log('[relay-pair] poll: no code in state'); return }
-          console.log(`[relay-pair] poll #${pollCount} code=${currentCode} nodeId=${currentNodeId.slice(0,8)}…`)
+          const logPoll = pollCount === 1 || pollCount % 12 === 0
+          if (logPoll) console.log(`[relay-pair] poll #${pollCount} code=${currentCode} nodeId=${currentNodeId.slice(0,8)}…`)
           const r = await fetch(
             `${controlUrl}/api/spinny/pairing/status?code=${currentCode}&nodeId=${currentNodeId}`,
             { signal: AbortSignal.timeout(8000) }
           );
           const body = await r.json();
-          console.log(`[relay-pair] poll #${pollCount} → HTTP ${r.status}`, JSON.stringify(body))
+          if (logPoll || !r.ok || body.claimed || body.expired) {
+            console.log(`[relay-pair] poll #${pollCount} → HTTP ${r.status}`, JSON.stringify(body))
+          }
           if (!r.ok) { console.error('[relay-pair] poll error:', r.status, body); return; }
           if (body.expired) { console.log('[relay-pair] code expired on cloud — waiting for rotation'); return; }
-          if (body.waiting) { console.log('[relay-pair] waiting for user to enter code'); return; }
+          if (body.waiting) {
+            if (logPoll) console.log('[relay-pair] waiting for user to enter code')
+            return
+          }
           if (body.claimed && body.relaySessionToken) {
             pairingClaimSeen = true
             clearInterval(rotateTimer)

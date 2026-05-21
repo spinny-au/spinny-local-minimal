@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { readFileSync, existsSync } from 'node:fs'
-import { join, extname } from 'node:path'
+import { join, extname, dirname } from 'node:path'
 import { spawn, execSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 
@@ -15,7 +15,7 @@ let _updateCheckCache = null // { result, fetchedAt }
 const UPDATE_CACHE_TTL = 5 * 60 * 1000
 
 function localCommitHash() {
-  try { return execSync('git rev-parse HEAD', { cwd: REPO_ROOT }).toString().trim() } catch { return null }
+  try { return execSync('git rev-parse HEAD', { cwd: REPO_ROOT, windowsHide: true }).toString().trim() } catch { return null }
 }
 
 async function fetchRemoteCommit() {
@@ -27,13 +27,45 @@ async function fetchRemoteCommit() {
   return { sha: d.sha, message: (d.commit?.message || '').split('\n')[0], date: d.commit?.author?.date || null }
 }
 
+function quoteCmdArg(arg) {
+  const text = String(arg)
+  if (/^[A-Za-z0-9_./:=\\-]+$/.test(text)) return text
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+function resolveSpawnCommand(cmd, args) {
+  if (process.platform !== 'win32') return { cmd, args }
+  if (cmd === 'git') return { cmd: 'git.exe', args }
+  if (cmd === 'npm') {
+    const candidates = [
+      process.env.npm_execpath && process.env.npm_execpath.endsWith('.js') ? process.env.npm_execpath : null,
+      join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    ].filter(Boolean)
+    const npmCli = candidates.find((p) => existsSync(p))
+    if (npmCli) return { cmd: process.execPath, args: [npmCli, ...args] }
+    return {
+      cmd: process.env.ComSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', ['npm', ...args].map(quoteCmdArg).join(' ')],
+    }
+  }
+  return { cmd, args }
+}
+
 function spawnStream(cmd, args, cwd, onLine) {
   return new Promise(resolve => {
-    const p = spawn(cmd, args, { cwd, shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    const resolved = resolveSpawnCommand(cmd, args)
+    const p = spawn(resolved.cmd, resolved.args, { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     const onChunk = chunk => chunk.toString().split('\n').filter(l => l.trim()).forEach(onLine)
+    let settled = false
     p.stdout.on('data', onChunk)
     p.stderr.on('data', onChunk)
-    p.on('close', resolve)
+    p.on('error', err => {
+      onLine(`${cmd} failed: ${err.message}`)
+      if (!settled) { settled = true; resolve(1) }
+    })
+    p.on('close', code => {
+      if (!settled) { settled = true; resolve(code ?? 1) }
+    })
   })
 }
 
@@ -79,18 +111,18 @@ function tailscaleStatus() {
   let status = null
   let error = null
   try {
-    execSync('tailscale version', { timeout: 3000, stdio: 'pipe' })
+    execSync('tailscale version', { timeout: 3000, stdio: 'pipe', windowsHide: true })
     installed = true
   } catch (err) {
     error = err.message
   }
   if (installed) {
     try {
-      const out = execSync('tailscale ip --4', { timeout: 3000, stdio: 'pipe' }).toString().trim()
+      const out = execSync('tailscale ip --4', { timeout: 3000, stdio: 'pipe', windowsHide: true }).toString().trim()
       if (/^\d+\.\d+\.\d+\.\d+$/.test(out)) ip = out
     } catch {}
     try {
-      const raw = execSync('tailscale status --json', { timeout: 5000, stdio: 'pipe' }).toString()
+      const raw = execSync('tailscale status --json', { timeout: 5000, stdio: 'pipe', windowsHide: true }).toString()
       const parsed = JSON.parse(raw)
       status = {
         backendState: parsed.BackendState || null,
@@ -1069,6 +1101,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         const installCode = await spawnStream('npm', ['install', '--omit=dev'], REPO_ROOT, l => send({ status: l }))
         if (installCode !== 0) return rollback('npm install failed')
 
+        send({ status: 'Restarting Spinny Local. The dashboard will be back soon.' })
         send({ done: true, success: true, restarting: true })
         res.end()
         restartProcess()
@@ -1097,6 +1130,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         if (resetCode !== 0) { send({ done: true, success: false, error: 'git reset failed' }); return res.end() }
         send({ status: 'Reinstalling dependencies…' })
         await spawnStream('npm', ['install', '--omit=dev'], REPO_ROOT, l => send({ status: l }))
+        send({ status: 'Restarting Spinny Local. The dashboard will be back soon.' })
         send({ done: true, success: true, restarting: true })
         res.end()
         restartProcess()

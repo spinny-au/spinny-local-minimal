@@ -237,7 +237,8 @@ step 'Starting node'
 # The Task Scheduler registration above is for auto-start at login only.
 Start-Process 'powershell.exe' `
     -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" `
-    -WorkingDirectory $INSTALL_DIR
+    -WorkingDirectory $INSTALL_DIR `
+    -WindowStyle Hidden
 if ($taskRegistered) {
     ok 'Node started — will also auto-start at every login via Task Scheduler'
 } else {

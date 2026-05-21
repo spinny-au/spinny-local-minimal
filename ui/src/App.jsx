@@ -986,6 +986,22 @@ function ChatTab({ sysInfo }) {
   )
 }
 
+const POST_RESTART_NOTICE_KEY = 'spinny:update-success'
+
+function readPostRestartNotice() {
+  try { return window.sessionStorage.getItem(POST_RESTART_NOTICE_KEY) || '' } catch { return '' }
+}
+
+function consumePostRestartNotice() {
+  const msg = readPostRestartNotice()
+  try { window.sessionStorage.removeItem(POST_RESTART_NOTICE_KEY) } catch {}
+  return msg
+}
+
+function savePostRestartNotice(message) {
+  try { window.sessionStorage.setItem(POST_RESTART_NOTICE_KEY, message) } catch {}
+}
+
 function useStreamedAction(endpoint) {
   const [phase, setPhase] = useState('idle') // idle | running | success | failed | rolledBack | restarting
   const [lines, setLines] = useState([])
@@ -1030,27 +1046,35 @@ function useStreamedAction(endpoint) {
   return { phase, lines, run, reset: () => { setPhase('idle'); setLines([]) } }
 }
 
-function ReconnectWatch({ onBack }) {
+function ReconnectWatch({ successMessage }) {
   const [secs, setSecs] = useState(0)
   const [reconnected, setReconnected] = useState(false)
 
   useEffect(() => {
+    let finished = false
     const tick = setInterval(() => setSecs(s => s + 1), 1000)
     const poll = setInterval(async () => {
       try {
-        const r = await fetch('/api/status')
-        if (r.ok) { setReconnected(true); clearInterval(poll); clearInterval(tick) }
+        const r = await fetch('/api/status?bust=' + Date.now(), { cache: 'no-store' })
+        if (r.ok && !finished) {
+          finished = true
+          setReconnected(true)
+          clearInterval(poll)
+          clearInterval(tick)
+          savePostRestartNotice(successMessage || 'Update complete. Spinny Local is back online.')
+          setTimeout(() => window.location.reload(), 700)
+        }
       } catch {}
     }, 2000)
-    return () => { clearInterval(tick); clearInterval(poll) }
-  }, [])
+    return () => { finished = true; clearInterval(tick); clearInterval(poll) }
+  }, [successMessage])
 
   if (reconnected) {
     return (
       <div style={{ textAlign: 'center', padding: '32px 0' }}>
         <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
-        <div style={{ fontSize: 15, color: 'var(--ok)', fontWeight: 600, marginBottom: 16 }}>Node is back online</div>
-        <button className="btn" onClick={onBack}>Back to dashboard</button>
+        <div style={{ fontSize: 15, color: 'var(--ok)', fontWeight: 600, marginBottom: 8 }}>Node is back online</div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Refreshing dashboard…</div>
       </div>
     )
   }
@@ -1058,10 +1082,10 @@ function ReconnectWatch({ onBack }) {
   return (
     <div style={{ textAlign: 'center', padding: '32px 0' }}>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
-        Waiting for node to restart… ({secs}s)
+        Spinny Local is restarting. The dashboard will be back soon. ({secs}s)
       </div>
       <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>
-        This page will reconnect automatically. Your pairing is safe.
+        Keep this tab open. It will refresh automatically after the background node comes back.
       </div>
     </div>
   )
@@ -1072,6 +1096,7 @@ function UpdateTab({ updateInfo: initialUpdateInfo, onUpdated }) {
   const rollback = useStreamedAction('/api/update/rollback')
   const [updateInfo, setUpdateInfo] = React.useState(initialUpdateInfo)
   const [checking, setChecking] = React.useState(false)
+  const [restartNotice, setRestartNotice] = React.useState(consumePostRestartNotice)
 
   React.useEffect(() => { setUpdateInfo(initialUpdateInfo) }, [initialUpdateInfo])
 
@@ -1086,12 +1111,18 @@ function UpdateTab({ updateInfo: initialUpdateInfo, onUpdated }) {
 
   const active = update.phase !== 'idle' ? update : rollback.phase !== 'idle' ? rollback : null
   const restarting = update.phase === 'restarting' || rollback.phase === 'restarting'
+  const notice = restartNotice ? (
+    <div className="msg ok" style={{ marginBottom: 14 }}>
+      {restartNotice}
+      <button className="btn secondary" style={{ marginLeft: 10, padding: '3px 8px' }} onClick={() => setRestartNotice('')}>Dismiss</button>
+    </div>
+  ) : null
 
   if (restarting) {
     return (
       <div className="card">
         <div className="card-title">Restarting node…</div>
-        <ReconnectWatch onBack={() => { update.reset(); rollback.reset(); onUpdated?.() }} />
+        <ReconnectWatch successMessage={update.phase === 'restarting' ? 'Update complete. Spinny Local is back online.' : 'Rollback complete. Spinny Local is back online.'} />
       </div>
     )
   }
@@ -1112,6 +1143,7 @@ function UpdateTab({ updateInfo: initialUpdateInfo, onUpdated }) {
     return (
       <div className="card">
         <div className="card-title">Updates</div>
+        {notice}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Not checked yet</span>
           {checkBtn}
@@ -1124,6 +1156,7 @@ function UpdateTab({ updateInfo: initialUpdateInfo, onUpdated }) {
     return (
       <div className="card">
         <div className="card-title">Updates</div>
+        {notice}
         <div style={{ color: 'var(--ok)', fontSize: 13, marginBottom: 12 }}>✓ Node is up to date</div>
         <div className="row">
           <span className="row-label">Version</span>
@@ -1142,6 +1175,7 @@ function UpdateTab({ updateInfo: initialUpdateInfo, onUpdated }) {
   return (
     <div className="card">
       <div className="card-title">Update Available</div>
+      {notice}
 
       <div className="row">
         <span className="row-label">Current</span>
@@ -1554,8 +1588,8 @@ const TABS = ['Status', 'Models', 'Chat', 'Vault', 'System', 'Logs', 'Admin', 'U
 
 export function App() {
   const { data: status, error: statusErr } = usePoll('/api/status', 5000)
-  const [tab, setTab] = useState('Admin') // default to Admin; switch to Status once paired
-  const [tabInitialised, setTabInitialised] = useState(false)
+  const [tab, setTab] = useState(() => readPostRestartNotice() ? 'Update' : 'Admin') // default to Admin; switch to Status once paired
+  const [tabInitialised, setTabInitialised] = useState(() => Boolean(readPostRestartNotice()))
 
   useEffect(() => {
     if (tabInitialised || !status) return
