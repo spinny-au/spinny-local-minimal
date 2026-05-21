@@ -1067,9 +1067,22 @@ function ReconnectWatch({ onBack }) {
   )
 }
 
-function UpdateTab({ updateInfo, onUpdated }) {
+function UpdateTab({ updateInfo: initialUpdateInfo, onUpdated }) {
   const update = useStreamedAction('/api/update/apply')
   const rollback = useStreamedAction('/api/update/rollback')
+  const [updateInfo, setUpdateInfo] = React.useState(initialUpdateInfo)
+  const [checking, setChecking] = React.useState(false)
+
+  React.useEffect(() => { setUpdateInfo(initialUpdateInfo) }, [initialUpdateInfo])
+
+  async function checkNow() {
+    setChecking(true)
+    try {
+      const r = await fetch('/api/update/check?bust=' + Date.now())
+      if (r.ok) setUpdateInfo(await r.json())
+    } catch {}
+    setChecking(false)
+  }
 
   const active = update.phase !== 'idle' ? update : rollback.phase !== 'idle' ? rollback : null
   const restarting = update.phase === 'restarting' || rollback.phase === 'restarting'
@@ -1089,11 +1102,20 @@ function UpdateTab({ updateInfo, onUpdated }) {
   const remoteDate = updateInfo?.remoteDate
   const hasUpdate = updateInfo?.updateAvailable
 
+  const checkBtn = (
+    <button className="btn secondary" onClick={checkNow} disabled={checking} style={{ marginLeft: 8 }}>
+      {checking ? 'Checking…' : '↻ Check now'}
+    </button>
+  )
+
   if (!updateInfo) {
     return (
       <div className="card">
         <div className="card-title">Updates</div>
-        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Checking for updates…</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Not checked yet</span>
+          {checkBtn}
+        </div>
       </div>
     )
   }
@@ -1107,7 +1129,8 @@ function UpdateTab({ updateInfo, onUpdated }) {
           <span className="row-label">Version</span>
           <span className="row-value" style={{ fontFamily: 'monospace', fontSize: 12 }}>{localHash || '—'}</span>
         </div>
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+          {checkBtn}
           <button className="btn secondary" onClick={update.run} disabled={update.phase === 'running'}>
             {update.phase === 'running' ? 'Restarting…' : '↺ Force Restart'}
           </button>
@@ -1134,6 +1157,7 @@ function UpdateTab({ updateInfo, onUpdated }) {
       </div>
 
       <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {checkBtn}
         <button
           className="btn"
           onClick={update.run}

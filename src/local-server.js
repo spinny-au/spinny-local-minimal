@@ -876,7 +876,8 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     // Check for updates — compare git commit hashes, cached 5 min
     if (url.pathname === '/api/update/check' && req.method === 'GET') {
       const now = Date.now()
-      if (_updateCheckCache && (now - _updateCheckCache.fetchedAt) < UPDATE_CACHE_TTL) {
+      const bust = url.searchParams.has('bust')
+      if (!bust && _updateCheckCache && (now - _updateCheckCache.fetchedAt) < UPDATE_CACHE_TTL) {
         return json(res, _updateCheckCache.result)
       }
       try {
