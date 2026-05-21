@@ -184,12 +184,25 @@ ok 'Desktop shortcut → http://localhost:47821'
 step 'Registering auto-start (Task Scheduler)'
 $nodeBin = (Get-Command node).Source
 $logPath = "$INSTALL_DIR\spinny-local.log"
-$psCmd   = "Set-Location '$INSTALL_DIR'; " +
-           "& '$nodeBin' --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js start" +
-           " *>> '$logPath'"
+
+# Write a dedicated launcher script — avoids quoting/redirection issues in Task Scheduler
+$launcherPath = "$INSTALL_DIR\start-node.ps1"
+$launcherContent = @"
+`$ErrorActionPreference = 'Continue'
+Set-Location '$INSTALL_DIR'
+Add-Content -Path '$logPath' -Value "[`$(Get-Date -f 'yyyy-MM-dd HH:mm:ss')] SpinnyLocalNode starting (node: `$(& '$nodeBin' --version 2>&1))"
+try {
+    & '$nodeBin' --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js start 2>&1 |
+        ForEach-Object { Add-Content -Path '$logPath' -Value "[`$(Get-Date -f 'HH:mm:ss')] `$_" }
+} catch {
+    Add-Content -Path '$logPath' -Value "[`$(Get-Date -f 'HH:mm:ss')] FATAL: `$_"
+}
+"@
+[System.IO.File]::WriteAllText($launcherPath, $launcherContent, [System.Text.UTF8Encoding]::new($false))
+
 $action  = New-ScheduledTaskAction `
     -Execute     'powershell.exe' `
-    -Argument    "-WindowStyle Hidden -NonInteractive -NoProfile -Command `"$psCmd`"" `
+    -Argument    "-WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" `
     -WorkingDirectory $INSTALL_DIR
 $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet `
@@ -221,11 +234,11 @@ if ($taskRegistered) {
         ok 'Node started via Task Scheduler'
     } catch {
         warn 'Task start failed — launching directly'
-        Start-Process 'powershell.exe' -ArgumentList "-WindowStyle Hidden -NonInteractive -NoProfile -Command `"$psCmd`"" -WorkingDirectory $INSTALL_DIR
+        Start-Process 'powershell.exe' -ArgumentList "-WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" -WorkingDirectory $INSTALL_DIR
         ok 'Node started in background'
     }
 } else {
-    Start-Process 'powershell.exe' -ArgumentList "-WindowStyle Hidden -NonInteractive -NoProfile -Command `"$psCmd`"" -WorkingDirectory $INSTALL_DIR
+    Start-Process 'powershell.exe' -ArgumentList "-WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" -WorkingDirectory $INSTALL_DIR
     ok 'Node started in background (no auto-start — re-run as Admin for that)'
 }
 
