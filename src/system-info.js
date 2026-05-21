@@ -7,6 +7,28 @@ import { spinnyHome } from './paths.js'
 
 let lastCpuSample = null
 
+// Cache ollama list — refreshed every 30s in the background so /api/system is instant
+let ollamaCache = { models: [], running: false, updatedAt: 0 }
+
+function refreshOllamaCache() {
+  try {
+    const out = execSync('ollama list', { timeout: 8000 }).toString()
+    const lines = out.split('\n').slice(1).filter(Boolean)
+    const models = lines.map(l => {
+      const parts = l.trim().split(/\s+/)
+      const size = parts[2] ? (parts[3]?.match(/^[A-Za-z]+$/) ? `${parts[2]} ${parts[3]}` : parts[2]) : ''
+      return { name: parts[0], size }
+    }).filter(m => m.name && m.name !== 'NAME')
+    ollamaCache = { models, running: true, updatedAt: Date.now() }
+  } catch {
+    ollamaCache = { models: ollamaCache.models, running: false, updatedAt: Date.now() }
+  }
+}
+
+// Warm the cache immediately on import, then refresh every 30s
+refreshOllamaCache()
+setInterval(refreshOllamaCache, 30_000).unref()
+
 function readCpuSample() {
   const cpus = os.cpus()
   const totals = cpus.reduce((acc, cpu) => {
@@ -59,18 +81,8 @@ export function getSystemInfo() {
     disk = { free: stat.bfree * stat.bsize, total: stat.blocks * stat.bsize }
   } catch {}
 
-  let ollamaModels = []
-  let ollamaRunning = false
-  try {
-    const out = execSync('ollama list', { timeout: 5000 }).toString()
-    ollamaRunning = true
-    const lines = out.split('\n').slice(1).filter(Boolean)
-    ollamaModels = lines.map(l => {
-      const parts = l.trim().split(/\s+/)
-      const size = parts[2] ? (parts[3]?.match(/^[A-Za-z]+$/) ? `${parts[2]} ${parts[3]}` : parts[2]) : ''
-      return { name: parts[0], size }
-    }).filter(m => m.name && m.name !== 'NAME')
-  } catch {}
+  const ollamaModels = ollamaCache.models
+  const ollamaRunning = ollamaCache.running
 
   // Read package.json for version
   let version = '0.1.0'

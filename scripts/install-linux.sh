@@ -9,6 +9,9 @@
 #
 # Update only (keeps pairing):
 #   bash <(curl -fsSL .../install-linux.sh) --update
+#
+# Headless server (auto-installs + connects Tailscale for remote access):
+#   bash <(curl -fsSL .../install-linux.sh) --headless
 set -euo pipefail
 
 REPO_URL="https://github.com/spinny-au/spinny-local-minimal.git"
@@ -20,10 +23,11 @@ SERVICE_NAME="spinny-local-minimal"
 NODE_PORT=47821
 CONTROL_URL="https://spinny.au"
 
-FRESH=false; UPDATE=false
+FRESH=false; UPDATE=false; HEADLESS=false
 for arg in "$@"; do
-  [[ "$arg" == "--fresh"  ]] && FRESH=true
-  [[ "$arg" == "--update" ]] && UPDATE=true
+  [[ "$arg" == "--fresh"    ]] && FRESH=true
+  [[ "$arg" == "--update"   ]] && UPDATE=true
+  [[ "$arg" == "--headless" ]] && HEADLESS=true
 done
 
 # ── Colours ───────────────────────────────────────────────────────────────────
@@ -211,7 +215,39 @@ for i in $(seq 1 30); do
 done
 [[ -z "$PAIRING_CODE" && "$PAIRED" == "false" ]] && PAIRING_CODE="run: journalctl --user -u ${SERVICE_NAME} -n 50"
 
-# ── 10. System info ───────────────────────────────────────────────────────────
+# ── 10. Tailscale ─────────────────────────────────────────────────────────────
+TAILSCALE_STR="Not installed"
+if $HEADLESS; then
+  step "Installing Tailscale (headless mode)"
+  if ! command -v tailscale &>/dev/null; then
+    curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1
+    ok "Tailscale installed"
+  else
+    ok "Tailscale already installed"
+  fi
+  # Bring up tailscale in auth mode — user will need to auth via printed URL
+  if tailscale status &>/dev/null 2>&1; then
+    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+    if [[ -n "$TAILSCALE_IP" ]]; then
+      TAILSCALE_STR="● Connected  •  $TAILSCALE_IP"
+      ok "Tailscale connected: $TAILSCALE_IP"
+    else
+      sudo tailscale up --accept-routes 2>/dev/null || true
+      TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+      TAILSCALE_STR="● Connected  •  ${TAILSCALE_IP:-pending auth}"
+    fi
+  else
+    warn "Tailscale installed but not authenticated — run: sudo tailscale up"
+    TAILSCALE_STR="○ Installed — run: sudo tailscale up"
+  fi
+else
+  if command -v tailscale &>/dev/null; then
+    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+    TAILSCALE_STR="${TAILSCALE_IP:+● Connected  •  $TAILSCALE_IP}${TAILSCALE_IP:-○ Installed (not connected)}"
+  fi
+fi
+
+# ── 11. System info ───────────────────────────────────────────────────────────
 CPU_COUNT=$(nproc 2>/dev/null || echo '?')
 RAM_GB=$(awk '/MemTotal/{printf "%.1f GB", $2/1048576}' /proc/meminfo 2>/dev/null || echo '?')
 DISK_FREE=$(df -h "$INSTALL_DIR" 2>/dev/null | awk 'NR==2{print $4}' || echo '?')
@@ -226,7 +262,7 @@ GIT_STR="✓ $(git --version)  (updates: re-run install-linux.sh)"
 PORT_OK=false
 curl -sf --max-time 3 "http://localhost:${NODE_PORT}/health" >/dev/null 2>&1 && PORT_OK=true
 
-# ── 11. Banner ────────────────────────────────────────────────────────────────
+# ── 12. Banner ────────────────────────────────────────────────────────────────
 clear
 
 LOGO=(
@@ -254,6 +290,7 @@ printf "  %-18s: %s vCPUs  •  %s  •  %s  •  %s free\n" "Hardware"  "$CPU_C
 printf "  %-18s: %s\n"                                   "Ollama"    "$OLLAMA_STR"
 printf "  %-18s: %s\n"                                   "Brain"     "$BRAIN"
 printf "  %-18s: %s\n"                                   "Status"    "$STATUS_STR"
+[[ "$TAILSCALE_STR" != "Not installed" ]] && printf "  %-18s: %s\n" "Tailscale" "$TAILSCALE_STR"
 echo ""
 printf "  %-18s: http://localhost:%s\n" "Node UI" "$NODE_PORT"
 echo ""
