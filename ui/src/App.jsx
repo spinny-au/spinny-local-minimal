@@ -1087,6 +1087,34 @@ function UpdateTab({ updateInfo, onUpdated }) {
   const remoteHash = updateInfo?.remoteHash
   const remoteMessage = updateInfo?.remoteMessage
   const remoteDate = updateInfo?.remoteDate
+  const hasUpdate = updateInfo?.updateAvailable
+
+  if (!updateInfo) {
+    return (
+      <div className="card">
+        <div className="card-title">Updates</div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Checking for updates…</div>
+      </div>
+    )
+  }
+
+  if (!hasUpdate) {
+    return (
+      <div className="card">
+        <div className="card-title">Updates</div>
+        <div style={{ color: 'var(--ok)', fontSize: 13, marginBottom: 12 }}>✓ Node is up to date</div>
+        <div className="row">
+          <span className="row-label">Version</span>
+          <span className="row-value" style={{ fontFamily: 'monospace', fontSize: 12 }}>{localHash || '—'}</span>
+        </div>
+        <div style={{ marginTop: 16 }}>
+          <button className="btn secondary" onClick={update.run} disabled={update.phase === 'running'}>
+            {update.phase === 'running' ? 'Restarting…' : '↺ Force Restart'}
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="card">
@@ -1399,7 +1427,7 @@ function AdminTab() {
   )
 }
 
-const TABS = ['Status', 'Models', 'Chat', 'Vault', 'System', 'Logs', 'Admin', 'About']
+const TABS = ['Status', 'Models', 'Chat', 'Vault', 'System', 'Logs', 'Admin', 'Update', 'About']
 
 export function App() {
   const { data: status, error: statusErr } = usePoll('/api/status', 5000)
@@ -1415,7 +1443,7 @@ export function App() {
   const { data: updateInfo } = usePoll('/api/update/check', 5 * 60 * 1000)
   const { data: dlData } = usePoll('/api/models/downloading', 2000)
   const hasUpdate = updateInfo?.updateAvailable
-  const tabs = hasUpdate ? [...TABS, 'Update'] : TABS
+  const tabs = TABS
 
   return (
     <>
