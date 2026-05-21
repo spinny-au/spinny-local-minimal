@@ -391,6 +391,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         || p === '/api/cloud-chat'
         || p === '/api/models'
         || p === '/api/instruction'
+        || p.startsWith('/api/pairing/')
         || p.startsWith('/api/email/')
         || p === '/api/memory/stats'
         || p === '/api/privacy'
@@ -420,6 +421,48 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         version: getSystemInfo().version,
         pairingCode: state.pairingCode || null,
       })
+    }
+
+    // Browser-assisted relay pairing finalization. spinny.au claims the code in
+    // Neon, then sends the short-lived relay session back to this localhost node
+    // so the machine itself can persist paired=true immediately.
+    if (url.pathname === '/api/pairing/finalize' && req.method === 'POST') {
+      corsSpinnyReq(res)
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        const state = saveState(loadState())
+        const nodeId = String(body.nodeId || '')
+        const accountEmail = String(body.accountEmail || '').toLowerCase().trim()
+        const relaySessionToken = String(body.relaySessionToken || '')
+        const relaySessionExpiresAt = String(body.relaySessionExpiresAt || '')
+        if (!nodeId || nodeId !== state.nodeId) return json(res, { error: 'nodeId mismatch' }, 400, corsSpinnyReq)
+        if (!accountEmail || !accountEmail.includes('@')) return json(res, { error: 'valid accountEmail required' }, 400, corsSpinnyReq)
+        if (!relaySessionToken || !relaySessionExpiresAt) return json(res, { error: 'relay session required' }, 400, corsSpinnyReq)
+
+        const identity = ensureNodeIdentity()
+        const existingUsers = Array.isArray(state.allowedUsers) ? state.allowedUsers : []
+        const hasUser = existingUsers.some(u => u?.email === accountEmail)
+        const next = saveState({
+          ...state,
+          paired: true,
+          accountId: accountEmail,
+          pairedAt: new Date().toISOString(),
+          relaySessionToken,
+          relaySessionExpiresAt,
+          nodePublicKey: identity.publicKeyDer,
+          controlPlanePublicKey: body.controlPlanePublicKey || null,
+          relayUrl: body.relayUrl || null,
+          controlUrl: body.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au',
+          allowedUsers: hasUser
+            ? existingUsers
+            : [{ email: accountEmail, role: existingUsers.length ? 'member' : 'owner', addedAt: new Date().toISOString() }, ...existingUsers],
+        })
+        onPaired?.(next)
+        return json(res, { ok: true, nodeId: next.nodeId, paired: true }, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message || 'finalize failed' }, err.status || 400, corsSpinnyReq)
+      }
     }
 
     // API system info
