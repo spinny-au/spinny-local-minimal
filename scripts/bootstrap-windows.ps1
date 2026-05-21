@@ -7,7 +7,7 @@
 # Update only (keeps pairing):
 #   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/bootstrap-windows.ps1'))) --update
 
-$INSTALLER_VERSION = '2026-05-21.4'
+$INSTALLER_VERSION = '2026-05-21.5'
 
 $isFresh  = $args -contains '--fresh'  -or $args -contains '-fresh'
 $isUpdate = $args -contains '--update' -or $args -contains '-update'
@@ -39,9 +39,26 @@ function Refresh-Path {
 }
 
 function Stop-Node {
+    # Kill node.exe that references our install dir or is running src/main.js
     Get-CimInstance Win32_Process -Filter "Name='node.exe'" -EA SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*SpinnyLocalMinimal*" } |
+        Where-Object { $_.CommandLine -like "*SpinnyLocalMinimal*" -or $_.CommandLine -like "*spinny-local*" -or $_.CommandLine -like "*main.js*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+    # Kill any powershell launchers running start-node.ps1
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -EA SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*start-node.ps1*" -or $_.CommandLine -like "*SpinnyLocalMinimal*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+}
+
+function Remove-Dir-Retry($path, $retries = 5) {
+    for ($i = 0; $i -lt $retries; $i++) {
+        try {
+            Remove-Item -Recurse -Force -EA Stop $path
+            return
+        } catch {
+            if ($i -eq ($retries - 1)) { warn "Could not fully remove $path — $($_.Exception.Message)" ; return }
+            Start-Sleep 2
+        }
+    }
 }
 
 # ── 1. Node.js 22 ─────────────────────────────────────────────────────────────
@@ -128,7 +145,11 @@ if (Test-Path "$INSTALL_DIR\.git") {
     # Wipe any partial/broken install before cloning
     if (Test-Path $INSTALL_DIR) {
         warn "Install directory exists but has no .git — wiping partial install"
-        & cmd /c "rmdir /s /q `"$INSTALL_DIR`"" 2>$null
+        # Stop any running process first (task may not have been unregistered yet)
+        Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false -EA SilentlyContinue
+        Stop-Node
+        Start-Sleep 2
+        Remove-Dir-Retry $INSTALL_DIR
         Start-Sleep 1
     }
     New-Item -ItemType Directory -Force -Path (Split-Path $INSTALL_DIR) | Out-Null
