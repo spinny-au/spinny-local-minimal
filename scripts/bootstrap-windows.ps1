@@ -7,7 +7,7 @@
 # Update only (keeps pairing):
 #   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/bootstrap-windows.ps1'))) --update
 
-$INSTALLER_VERSION = '2026-05-21.1'
+$INSTALLER_VERSION = '2026-05-21.2'
 
 $isFresh  = $args -contains '--fresh'  -or $args -contains '-fresh'
 $isUpdate = $args -contains '--update' -or $args -contains '-update'
@@ -187,18 +187,20 @@ step 'Registering auto-start (Task Scheduler)'
 $nodeBin = (Get-Command node).Source
 $logPath = "$INSTALL_DIR\spinny-local.log"
 
-# Write a dedicated launcher script — avoids quoting/redirection issues in Task Scheduler
+# Write a dedicated launcher script — Start-Transcript captures everything at session level
 $launcherPath = "$INSTALL_DIR\start-node.ps1"
 $launcherContent = @"
-`$ErrorActionPreference = 'Continue'
+Start-Transcript -Path '$logPath' -Force
+Write-Host "=== SpinnyLocalNode launcher `$(Get-Date) ==="
+Write-Host "Node binary: '$nodeBin'"
+Write-Host "Node version: `$(& '$nodeBin' --version 2>&1)"
+Write-Host "Working dir: `$(Get-Location)"
 Set-Location '$INSTALL_DIR'
-Add-Content -Path '$logPath' -Value "[`$(Get-Date -f 'yyyy-MM-dd HH:mm:ss')] SpinnyLocalNode starting (node: `$(& '$nodeBin' --version 2>&1))"
-try {
-    & '$nodeBin' --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js start 2>&1 |
-        ForEach-Object { Add-Content -Path '$logPath' -Value "[`$(Get-Date -f 'HH:mm:ss')] `$_" }
-} catch {
-    Add-Content -Path '$logPath' -Value "[`$(Get-Date -f 'HH:mm:ss')] FATAL: `$_"
-}
+Write-Host "src/main.js exists: `$(Test-Path src/main.js)"
+Write-Host "Starting node..."
+& '$nodeBin' --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js start
+Write-Host "Node exited with code: `$LASTEXITCODE"
+Stop-Transcript
 "@
 [System.IO.File]::WriteAllText($launcherPath, $launcherContent, [System.Text.UTF8Encoding]::new($false))
 
