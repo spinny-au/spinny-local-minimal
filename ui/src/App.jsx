@@ -340,51 +340,74 @@ function ReconnectButton() {
   )
 }
 
-function PairingTokenCard({ code: initialCode }) {
-  const [code, setCode] = useState(initialCode)
+function TotpRing({ remaining, ttl, size = 36 }) {
+  const r = (size - 4) / 2
+  const circ = 2 * Math.PI * r
+  const progress = remaining / ttl
+  const offset = circ * (1 - progress)
+  return (
+    <svg width={size} height={size} style={{ flexShrink: 0 }}>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={3} />
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--accent)" strokeWidth={3}
+        strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+        transform={`rotate(-90 ${size/2} ${size/2})`}
+        style={{ transition: 'stroke-dashoffset 1s linear' }}
+      />
+    </svg>
+  )
+}
+
+function PairingTokenCard() {
+  const [token, setToken] = useState(null)
   const [visible, setVisible] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
 
-  async function showFresh() {
-    setRefreshing(true)
+  const fetchToken = useCallback(async () => {
     try {
-      const res = await fetch('/pairing/refresh', { method: 'POST' })
-      const data = await res.json()
-      if (data.code) setCode(data.code)
+      const res = await fetch('/pairing/token')
+      if (res.ok) setToken(await res.json())
     } catch {}
-    setRefreshing(false)
-    setVisible(true)
-  }
+  }, [])
+
+  useEffect(() => {
+    fetchToken()
+    const iv = setInterval(fetchToken, 3000)
+    return () => clearInterval(iv)
+  }, [fetchToken])
 
   const copy = () => {
-    navigator.clipboard.writeText(code).then(() => {
+    if (!token?.code) return
+    navigator.clipboard.writeText(token.code).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     })
   }
-  const pairingUrl = `https://spinny.au/?localcode=${code}`
+
+  if (!token) return null
+
+  const remaining = token.remaining ?? token.ttl ?? 60
+  const ttl = token.ttl ?? 60
+
   return (
     <div className="card">
       <div className="card-title">Pairing Token</div>
-      {!visible ? (
-        <button className="btn" onClick={showFresh} disabled={refreshing}>
-          {refreshing ? 'Generating…' : 'Show pairing token'}
-        </button>
-      ) : (
-        <div className="pairing-code-wrap">
-          <div className="pairing-code">
-            <div className="pairing-code-value">{code}</div>
-            <button className="btn" onClick={copy}>{copied ? 'Copied!' : 'Copy'}</button>
-            <button className="btn" onClick={showFresh} disabled={refreshing} title="Generate new code">
-              {refreshing ? '…' : '↻'}
-            </button>
-          </div>
-          <div className="pairing-hint">
-            Enter this code at <a href={pairingUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>spinny.au</a> to pair this node. A new code is generated each time.
-          </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <TotpRing remaining={remaining} ttl={ttl} />
+        <div style={{ fontFamily: 'monospace', fontSize: 28, fontWeight: 700, letterSpacing: '0.18em', flex: 1, color: 'var(--text)' }}>
+          {visible ? (token.code || '——') : '••••••'}
         </div>
-      )}
+        <button className="btn" onClick={() => setVisible(v => !v)} title={visible ? 'Hide' : 'Reveal'} style={{ fontSize: 16, padding: '6px 10px' }}>
+          {visible ? '🙈' : '👁'}
+        </button>
+        <button className="btn" onClick={copy} disabled={!visible}>
+          {copied ? '✓' : 'Copy'}
+        </button>
+      </div>
+      <div className="pairing-hint" style={{ marginTop: 8 }}>
+        {token.pairedCount >= token.maxPairedAccounts
+          ? `${token.pairedCount}/${token.maxPairedAccounts} accounts paired — token will stop rotating.`
+          : `Rotates every ${ttl}s — enter at spinny.au to pair. ${token.pairedCount}/${token.maxPairedAccounts} account(s) paired.`}
+      </div>
     </div>
   )
 }
@@ -579,7 +602,7 @@ function StatusTab({ status, sysInfo, error }) {
           <span className="row-value">{sysInfo?.version || status.version || '—'}</span>
         </div>
       </div>
-      {status.pairingCode && <PairingTokenCard code={status.pairingCode} />}
+      {!status.paired && <PairingTokenCard />}
       {status.accountId && <AccessCard ownerEmail={status.accountId} />}
     </>
   )

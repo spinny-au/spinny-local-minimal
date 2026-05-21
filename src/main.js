@@ -50,6 +50,7 @@ try {
     let relayConnected = false;
     let relayInstance = null;
     let relayError = null;
+    let stopRotation = () => {};
 
     // Suppress unhandled rejections from systray2's internal async init —
     // the tray is optional and must never crash the main process.
@@ -65,6 +66,7 @@ try {
         console.log(`\nPaired! Node ID: ${result.nodeId}`);
         console.log("Starting relay connection...\n");
         pairingResolver?.(result);
+        stopRotation?.();
       }
     });
 
@@ -73,11 +75,39 @@ try {
     startSubagentScheduler({ monitorEmails, executeEmailAction, sendTelegramNotification, formatTelegramNotification })
 
     if (!state.paired) {
-      // Always regenerate on startup — stale codes from previous installs are already
-      // claimed or expired in the cloud DB and can never complete pairing.
-      state = saveState({ ...state, pairingCode: generatePairingCode() });
-      const code = state.pairingCode;
       const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
+      const ROTATE_MS = 60 * 1000
+
+      function needsMorePairings(s) {
+        if (!s.multiAccount) return !s.paired
+        return (s.allowedUsers?.length || 0) < (s.maxPairedAccounts || 1)
+      }
+
+      async function rotateCode() {
+        const s = loadState()
+        if (!needsMorePairings(s)) return
+        const code = generatePairingCode()
+        saveState({ ...s, pairingCode: code, pairingCodeIssuedAt: Date.now() })
+        try {
+          await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pairingCode: code, nodeId: s.nodeId }),
+            signal: AbortSignal.timeout(8000),
+          })
+        } catch {}
+      }
+
+      // Fresh code on startup — always regenerate, stale codes are expired in cloud DB
+      await rotateCode()
+      state = loadState()
+      const rotateTimer = setInterval(rotateCode, ROTATE_MS)
+      stopRotation = () => {
+        const s = loadState()
+        if (!needsMorePairings(s)) clearInterval(rotateTimer)
+      }
+
+      const code = state.pairingCode;
       const pairingUrl = `${controlUrl}/?localcode=${code}`;
 
       // Detect Tailscale IP for remote-node users

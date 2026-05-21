@@ -20,6 +20,8 @@ const DEFAULT_STATE = {
   paired: false,
   accountId: null,
   pairingCode: null,
+  pairingCodeIssuedAt: null,
+  maxPairedAccounts: 1,
   relaySessionToken: null,
   relaySessionExpiresAt: null,
   relayUrl: null,

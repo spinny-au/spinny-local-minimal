@@ -745,20 +745,47 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       return
     }
 
-    // Generate a fresh pairing code on demand and immediately advertise it
-    if (url.pathname === '/pairing/refresh' && req.method === 'POST') {
+    // Current pairing token + countdown info
+    if (url.pathname === '/pairing/token' && req.method === 'GET') {
       const state = loadState()
-      if (state.paired) return json(res, { error: 'already paired' }, 400)
-      const code = generatePairingCode()
-      const newState = saveState({ ...state, pairingCode: code })
-      const controlUrl = process.env.SPINNY_CONTROL_URL || 'https://spinny.au'
-      fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pairingCode: code, nodeId: newState.nodeId }),
-        signal: AbortSignal.timeout(5000),
-      }).catch(() => {})
-      return json(res, { code })
+      const issuedAt = state.pairingCodeIssuedAt || Date.now()
+      const ttl = 60
+      const elapsed = Math.floor((Date.now() - issuedAt) / 1000)
+      const remaining = Math.max(0, ttl - (elapsed % ttl))
+      return json(res, {
+        code: state.pairingCode || null,
+        issuedAt,
+        ttl,
+        remaining,
+        paired: state.paired,
+        maxPairedAccounts: state.maxPairedAccounts || 1,
+        pairedCount: state.allowedUsers?.length || (state.paired ? 1 : 0),
+      })
+    }
+
+    // Admin config — gated by dashboard token
+    if (url.pathname === '/admin/config') {
+      const adminToken = req.headers['x-admin-token']
+      const envToken = process.env.SPINNY_DASHBOARD_TOKEN
+      if (!envToken || adminToken !== envToken) return json(res, { error: 'unauthorized' }, 401)
+      if (req.method === 'GET') {
+        const state = loadState()
+        return json(res, {
+          maxPairedAccounts: state.maxPairedAccounts || 1,
+          multiAccount: state.multiAccount || false,
+          allowedUsers: state.allowedUsers || [],
+          pairedCount: state.allowedUsers?.length || (state.paired ? 1 : 0),
+        })
+      }
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req)
+        const state = loadState()
+        const updates = {}
+        if (typeof body.maxPairedAccounts === 'number') updates.maxPairedAccounts = Math.max(1, Math.min(50, body.maxPairedAccounts))
+        if (typeof body.multiAccount === 'boolean') updates.multiAccount = body.multiAccount
+        saveState({ ...state, ...updates })
+        return json(res, { ok: true })
+      }
     }
 
     // Code-based direct pairing endpoint

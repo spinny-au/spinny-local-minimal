@@ -7,7 +7,7 @@
 # Update only (keeps pairing):
 #   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/bootstrap-windows.ps1'))) --update
 
-$INSTALLER_VERSION = '2026-05-21.3'
+$INSTALLER_VERSION = '2026-05-21.4'
 
 $isFresh  = $args -contains '--fresh'  -or $args -contains '-fresh'
 $isUpdate = $args -contains '--update' -or $args -contains '-update'
@@ -244,21 +244,18 @@ if ($taskRegistered) {
     ok 'Node started in background (re-run as Admin to enable auto-start at login)'
 }
 
-# ── 11. Wait for pairing code ─────────────────────────────────────────────────
+# ── 11. Wait for node to initialise ──────────────────────────────────────────
 step 'Waiting for node to initialise'
-$pairingCode = ''; $paired = $false
-for ($i = 0; $i -lt 30; $i++) {
+$paired = $false
+for ($i = 0; $i -lt 15; $i++) {
     Start-Sleep 1
     if (Test-Path $STATE_FILE) {
         try {
             $st = Get-Content $STATE_FILE -Raw | ConvertFrom-Json
-            if ($st.paired -eq $true)  { $paired      = $true;            break }
-            if ($st.pairingCode)       { $pairingCode = $st.pairingCode;   break }
+            if ($st.paired -eq $true) { $paired = $true; break }
+            if ($st.nodeId)           { break }  # node has initialised
         } catch {}
     }
-}
-if (-not $pairingCode -and -not $paired) {
-    $pairingCode = 'check Task Scheduler → SpinnyLocalNode for logs'
 }
 
 # ── 12. System info ───────────────────────────────────────────────────────────
@@ -312,16 +309,9 @@ Write-Host ''
 Write-Host ('  {0,-18}: http://localhost:{1}' -f 'Node UI', $NODE_PORT)
 Write-Host ''
 
-if ($paired) {
-    Write-Host ('  {0,-18}: already paired ✓' -f 'Pairing')
-} else {
-    Write-Host ('  {0,-18}: {1}' -f 'Pairing code', $pairingCode)
-    Write-Host "                       ${DIM}Enter this at spinny.au → Settings → Local Node${RST}"
-}
-
-Write-Host ''
-Write-Host -NoNewline ('  {0,-18}: ' -f 'Dashboard token')
+Write-Host -NoNewline ('  {0,-18}: ' -f 'Admin token')
 Write-Host "${Y}${B}$dashToken${RST}"
+Write-Host "                       ${DIM}Use this to access the Admin section in the Node UI${RST}"
 Write-Host "                       ${DIM}$envFile${RST}"
 Write-Host ''
 Write-Host ('  {0,-18}: {1}' -f 'Git', $gitStr)
@@ -347,7 +337,7 @@ if ($portOk) {
 
 Write-Host "${DIM}$LINE${RST}"
 if ($portOk) {
-    Write-Host "  Node is ready. Open ${B}spinny.au${RST} and enter your pairing code."
+    Write-Host "  Node is ready. Open ${B}http://localhost:$NODE_PORT${RST} → get pairing token → enter at spinny.au"
 } else {
     Write-Host "  ${Y}If the log shows an error, fix it then re-run this installer.${RST}"
     Write-Host "  ${DIM}Or check Task Scheduler → SpinnyLocalNode → History for details.${RST}"
