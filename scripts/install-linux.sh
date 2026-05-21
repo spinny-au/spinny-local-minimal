@@ -184,7 +184,7 @@ ok ".env written (node name: ${NODE_NAME_ENV})"
 # ── 8. spinny CLI wrapper ─────────────────────────────────────────────────────
 step "Installing spinny CLI"
 # Prefer /usr/local/bin (always on PATH); fall back to ~/.local/bin.
-if [[ "$EUID" -eq 0 ]] || { command -v sudo &>/dev/null && sudo -n true 2>/dev/null; }; then
+if [[ "$EUID" -eq 0 ]] || command -v sudo &>/dev/null; then
   CLI_DIR="/usr/local/bin"
 else
   CLI_DIR="$HOME/.local/bin"
@@ -251,7 +251,9 @@ gen_pairing_code() {
   echo "\$code"
 }
 
-case "\${1:-help}" in
+CLI_CMD="\${*:-help}"
+
+case "\$CLI_CMD" in
   --update|update)
     echo "Updating Spinny local node..."
     bash <(curl -fsSL "\$INSTALL_SCRIPT") --update ;;
@@ -275,11 +277,11 @@ case "\${1:-help}" in
     else
       echo "unknown"
     fi ;;
-  pairingcode)
+  pairingcode|pairing-code|"pairing code")
     print_pairing_code ;;
-  genpairingcode)
+  genpairingcode|gen-pairing-code|"gen pairing code"|"generate pairing code")
     gen_pairing_code ;;
-  sendhealth|send-health)
+  sendhealth|send-health|"send health")
     (
       cd "\$INSTALL_DIR" &&
       node --experimental-sqlite --no-warnings --env-file-if-exists=.env --input-type=module -e "import('./src/relay.js').then(async m => { const r = await m.pushHealthDirect(); if (r?.skipped) { console.error(r.reason); process.exit(1) } console.log('Health sent to spinny.au') }).catch(err => { console.error(err?.message || String(err)); process.exit(1) })"
@@ -289,7 +291,7 @@ case "\${1:-help}" in
     echo "  spinny --update   Pull latest code and restart"
     echo "  spinny --fresh    Wipe state and reinstall (re-pairs)"
     echo "  spinny version    Show installed version"
-    echo "  spinny pairingcode     Show current pairing code"
+    echo "  spinny pairing code    Show current pairing code"
     echo "  spinny genpairingcode  Generate a fresh pairing code"
     echo "  spinny sendhealth      Push current health to spinny.au"
     echo "  spinny status     Show service status"
@@ -300,7 +302,11 @@ esac
 SPINNY_CLI
 
 if [[ "$CLI_DIR" == "/usr/local/bin" && "$EUID" -ne 0 ]]; then
-  sudo install -m 755 "$CLI_WRAPPER" "$CLI_DIR/spinny"
+  if ! sudo install -m 755 "$CLI_WRAPPER" "$CLI_DIR/spinny"; then
+    CLI_DIR="$HOME/.local/bin"
+    mkdir -p "$CLI_DIR"
+    install -m 755 "$CLI_WRAPPER" "$CLI_DIR/spinny"
+  fi
 else
   install -m 755 "$CLI_WRAPPER" "$CLI_DIR/spinny"
 fi
