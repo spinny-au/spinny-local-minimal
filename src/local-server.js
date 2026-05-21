@@ -44,7 +44,6 @@ function restartProcess() {
   child.unref()
   setTimeout(() => process.exit(0), 800)
 }
-import { randomBytes } from 'node:crypto'
 import { loadState, saveState, generatePairingCode } from './state.js'
 import { pairNodeDirect } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
@@ -82,44 +81,6 @@ import {
 } from './instruction-handler.js'
 
 const downloads = new Map() // model -> { status, progress, done, success, startedAt }
-
-// ── Admin session store (in-memory, cleared on restart) ───────────────────────
-const adminSessions = new Map() // token -> expiresAt
-const ADMIN_SESSION_TTL = 30 * 60 * 1000 // 30 min
-
-function createAdminSession() {
-  const token = randomBytes(32).toString('hex')
-  adminSessions.set(token, Date.now() + ADMIN_SESSION_TTL)
-  return token
-}
-
-function isValidAdminSession(token) {
-  if (!token) return false
-  const exp = adminSessions.get(token)
-  if (!exp) return false
-  if (Date.now() > exp) { adminSessions.delete(token); return false }
-  adminSessions.set(token, Date.now() + ADMIN_SESSION_TTL) // refresh on use
-  return true
-}
-
-// ── Rate limiter for admin auth (per IP) ──────────────────────────────────────
-const authAttempts = new Map() // ip -> { count, lockUntil }
-const MAX_AUTH_ATTEMPTS = 5
-const AUTH_LOCKOUT_MS   = 15 * 60 * 1000 // 15 min
-
-function checkRateLimit(ip) {
-  const now = Date.now()
-  const rec = authAttempts.get(ip) || { count: 0, lockUntil: 0 }
-  if (rec.lockUntil > now) return { blocked: true, retryAfter: Math.ceil((rec.lockUntil - now) / 1000) }
-  return { blocked: false }
-}
-function recordFailedAttempt(ip) {
-  const rec = authAttempts.get(ip) || { count: 0, lockUntil: 0 }
-  rec.count++
-  if (rec.count >= MAX_AUTH_ATTEMPTS) { rec.lockUntil = Date.now() + AUTH_LOCKOUT_MS; rec.count = 0 }
-  authAttempts.set(ip, rec)
-}
-function clearAttempts(ip) { authAttempts.delete(ip) }
 
 const VAULT_NS = 'byok'
 const SPINNY_ORIGINS = new Set(['https://spinny.au', 'https://www.spinny.au'])
@@ -821,13 +782,10 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       return
     }
 
-    // Current pairing token — gated once initial setup is done
+    // Pairing token — dashboard auth required
     if (url.pathname === '/pairing/token' && req.method === 'GET') {
+      if (!isDashboardAuthed(req)) return json(res, { error: 'unauthorized' }, 401)
       const state = loadState()
-      const session = req.headers['x-admin-session']
-      if (state.initialAdminSetupDone && !isValidAdminSession(session)) {
-        return json(res, { error: 'unauthorized' }, 401)
-      }
       const issuedAt = state.pairingCodeIssuedAt || Date.now()
       const ttl = 60
       const elapsed = Math.floor((Date.now() - issuedAt) / 1000)
@@ -841,64 +799,9 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       })
     }
 
-    // Admin auth — initial token or one-time cloud key
-    if (url.pathname === '/admin/auth' && req.method === 'POST') {
-      const ip = req.socket?.remoteAddress || 'unknown'
-      const rl = checkRateLimit(ip)
-      if (rl.blocked) return json(res, { error: `Too many attempts. Try again in ${Math.ceil(rl.retryAfter / 60)} min.` }, 429)
-
-      const body = await readJsonBody(req)
-      const token = (body.token || '').trim()
-      if (!token) return json(res, { error: 'Missing token' }, 400)
-
-      const state = loadState()
-      const envToken = process.env.SPINNY_DASHBOARD_TOKEN
-
-      // Initial admin token (only valid before initialAdminSetupDone)
-      if (!state.initialAdminSetupDone && envToken && token === envToken) {
-        clearAttempts(ip)
-        return json(res, { ok: true, session: createAdminSession(), mode: 'initial' })
-      }
-
-      // One-time key from spinny.au (post-pairing)
-      if (state.paired && state.nodeId) {
-        try {
-          const controlUrl = process.env.SPINNY_CONTROL_URL || 'https://spinny.au'
-          const r = await fetch(`${controlUrl}/api/spinny/local-nodes/${state.nodeId}/admin-key/verify`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: token }),
-            signal: AbortSignal.timeout(8000),
-          })
-          if (r.ok) { clearAttempts(ip); return json(res, { ok: true, session: createAdminSession(), mode: 'owner' }) }
-        } catch {}
-      }
-
-      recordFailedAttempt(ip)
-      const rec = authAttempts.get(ip) || { count: 0 }
-      const remaining2 = MAX_AUTH_ATTEMPTS - rec.count
-      return json(res, { error: `Invalid token. ${remaining2} attempt(s) remaining.` }, 401)
-    }
-
-    // Admin session check
-    if (url.pathname === '/admin/session' && req.method === 'GET') {
-      const session = req.headers['x-admin-session']
-      return json(res, { valid: isValidAdminSession(session) })
-    }
-
-    // Burn initial admin token after pairing (write flag before confirming)
-    if (url.pathname === '/admin/burn-initial' && req.method === 'POST') {
-      const session = req.headers['x-admin-session']
-      if (!isValidAdminSession(session)) return json(res, { error: 'unauthorized' }, 401)
-      const state = loadState()
-      saveState({ ...state, initialAdminSetupDone: true }) // durable before response
-      return json(res, { ok: true })
-    }
-
-    // Admin config — session-gated
+    // Admin config — dashboard auth required
     if (url.pathname === '/admin/config') {
-      const session = req.headers['x-admin-session']
-      if (!isValidAdminSession(session)) return json(res, { error: 'unauthorized' }, 401)
+      if (!isDashboardAuthed(req)) return json(res, { error: 'unauthorized' }, 401)
       if (req.method === 'GET') {
         const state = loadState()
         return json(res, {
@@ -907,7 +810,6 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
           locked: state.locked || false,
           allowedUsers: state.allowedUsers || [],
           pairedCount: state.allowedUsers?.length || (state.paired ? 1 : 0),
-          initialAdminSetupDone: state.initialAdminSetupDone || false,
           paired: state.paired,
         })
       }
@@ -925,7 +827,6 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
           locked: next.locked || false,
           allowedUsers: next.allowedUsers || [],
           pairedCount: next.allowedUsers?.length || (next.paired ? 1 : 0),
-          initialAdminSetupDone: next.initialAdminSetupDone || false,
           paired: next.paired,
         })
       }
