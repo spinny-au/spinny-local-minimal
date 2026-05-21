@@ -48,12 +48,39 @@ async function runNpmInstall() {
   return run(npm.command, npm.args)
 }
 
-function restartNode() {
+async function restartNode() {
   if (process.platform === 'win32') {
-    // Restart via Task Scheduler — same hidden launcher used at login, no flash
-    spawn('schtasks.exe', ['/run', '/tn', 'SpinnyLocalNode'], {
-      detached: true, stdio: 'ignore', windowsHide: true,
-    }).unref()
+    const taskName = 'SpinnyLocalNode'
+    // End the task first — if Task Scheduler still thinks it's Running (process
+    // already gone but state not yet flushed), /run is a silent no-op.
+    await new Promise(resolve => {
+      const end = spawn('schtasks.exe', ['/end', '/tn', taskName], {
+        stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      })
+      let out = ''
+      end.stdout?.on('data', d => { out += d })
+      end.stderr?.on('data', d => { out += d })
+      end.on('close', code => {
+        log(`schtasks /end exited ${code}: ${out.trim() || '(no output)'}`)
+        resolve(undefined)
+      })
+      end.on('error', err => { log(`schtasks /end error: ${err.message}`); resolve(undefined) })
+    })
+    await sleep(1500)
+    // Now launch via Task Scheduler — hidden, no console flash
+    await new Promise(resolve => {
+      const run = spawn('schtasks.exe', ['/run', '/tn', taskName], {
+        stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      })
+      let out = ''
+      run.stdout?.on('data', d => { out += d })
+      run.stderr?.on('data', d => { out += d })
+      run.on('close', code => {
+        log(`schtasks /run exited ${code}: ${out.trim() || '(no output)'}`)
+        resolve(undefined)
+      })
+      run.on('error', err => { log(`schtasks /run error: ${err.message}`); resolve(undefined) })
+    })
   } else {
     spawn(process.execPath, [
       '--experimental-sqlite',
