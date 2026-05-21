@@ -183,8 +183,10 @@ ok 'Desktop shortcut → http://localhost:47821'
 # ── 9. Task Scheduler (auto-start, hidden, restarts on failure) ───────────────
 step 'Registering auto-start (Task Scheduler)'
 $nodeBin = (Get-Command node).Source
+$logPath = "$INSTALL_DIR\spinny-local.log"
 $psCmd   = "Set-Location '$INSTALL_DIR'; " +
-           "& '$nodeBin' --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js start"
+           "& '$nodeBin' --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js start" +
+           " *>> '$logPath'"
 $action  = New-ScheduledTaskAction `
     -Execute     'powershell.exe' `
     -Argument    "-WindowStyle Hidden -NonInteractive -NoProfile -Command `"$psCmd`"" `
@@ -209,6 +211,9 @@ try {
 }
 
 # ── 10. Start now ─────────────────────────────────────────────────────────────
+# Clear log so boot log in the banner reflects this run only
+'' | Set-Content $logPath -Encoding UTF8 -EA SilentlyContinue
+
 step 'Starting node'
 if ($taskRegistered) {
     try {
@@ -311,9 +316,25 @@ if ($portOk) {
     Write-Host "  ${G}${B}✓ Port $NODE_PORT reachable on localhost${RST}"
 } else {
     Write-Host "  ${Y}○ Port $NODE_PORT not yet reachable — node is still starting${RST}"
+
+    $logFile = "$INSTALL_DIR\spinny-local.log"
+    if (Test-Path $logFile) {
+        Write-Host ''
+        Write-Host "  ${Y}${B}Boot log (last 30 lines):${RST}"
+        Write-Host "${DIM}$('-'*68)${RST}"
+        Get-Content $logFile -Tail 30 | ForEach-Object { Write-Host "  $_" }
+        Write-Host "${DIM}$('-'*68)${RST}"
+    } else {
+        Write-Host "  ${DIM}(no log file yet — Task Scheduler may not have fired)${RST}"
+    }
 }
 
 Write-Host "${DIM}$LINE${RST}"
-Write-Host "  Node is ready. Open ${B}spinny.au${RST} and enter your pairing code."
+if ($portOk) {
+    Write-Host "  Node is ready. Open ${B}spinny.au${RST} and enter your pairing code."
+} else {
+    Write-Host "  ${Y}If the log shows an error, fix it then re-run this installer.${RST}"
+    Write-Host "  ${DIM}Or check Task Scheduler → SpinnyLocalNode → History for details.${RST}"
+}
 Write-Host "${DIM}$LINE${RST}"
 Write-Host ''
