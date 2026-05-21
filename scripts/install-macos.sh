@@ -250,6 +250,11 @@ case "\${1:-help}" in
     print_pairing_code ;;
   genpairingcode)
     gen_pairing_code ;;
+  sendhealth|send-health)
+    (
+      cd "\$INSTALL_DIR" &&
+      node --experimental-sqlite --no-warnings --env-file-if-exists=.env --input-type=module -e "import('./src/relay.js').then(async m => { const r = await m.pushHealthDirect(); if (r?.skipped) { console.error(r.reason); process.exit(1) } console.log('Health sent to spinny.au') }).catch(err => { console.error(err?.message || String(err)); process.exit(1) })"
+    ) ;;
   help|--help|-h|*)
     echo "Usage: spinny <command>"
     echo "  spinny --update   Pull latest code and restart"
@@ -257,6 +262,7 @@ case "\${1:-help}" in
     echo "  spinny version    Show installed version"
     echo "  spinny pairingcode     Show current pairing code"
     echo "  spinny genpairingcode  Generate a fresh pairing code"
+    echo "  spinny sendhealth      Push current health to spinny.au"
     echo "  spinny status     Show service status"
     echo "  spinny logs       Tail the node log"
     echo "  spinny restart    Restart the service"

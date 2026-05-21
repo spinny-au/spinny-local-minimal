@@ -72,21 +72,27 @@ function skipLegacyVpsRelayUrl(url, target = 'Cloudflare relay') {
   return true
 }
 
-async function pushHealthDirect() {
+export async function pushHealthDirect() {
   const state = loadState()
-  if (!state.paired || !state.nodeId) return
+  if (!state.paired || !state.nodeId) return { ok: false, skipped: true, reason: 'node is not paired' }
   const base = (state.controlUrl || 'https://spinny.au').replace(/\/$/, '')
   const headers = { 'content-type': 'application/json' }
   if (state.relaySessionToken) {
     headers['authorization'] = `Bearer ${state.relaySessionToken}`
     headers['x-spinny-node-id'] = state.nodeId
   }
-  await fetch(`${base}/api/spinny/local-nodes/${encodeURIComponent(state.nodeId)}/health`, {
+  const response = await fetch(`${base}/api/spinny/local-nodes/${encodeURIComponent(state.nodeId)}/health`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ health: getSystemInfo() }),
     signal: AbortSignal.timeout(8000),
   })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const msg = body?.error || body?.detail || `HTTP ${response.status}`
+    throw new Error(`health push failed: ${msg}`)
+  }
+  return { ok: true, status: response.status, body }
 }
 
 export function startHealthPush() {
