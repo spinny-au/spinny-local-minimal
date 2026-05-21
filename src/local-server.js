@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 
 const _require = createRequire(import.meta.url)
 const LOCAL_VERSION = (() => { try { return _require('../package.json').version } catch { return '0.0.0' } })()
-import { loadState } from './state.js'
+import { loadState, saveState, generatePairingCode } from './state.js'
 import { pairNodeDirect } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
 import { getLines } from './log-buffer.js'
@@ -743,6 +743,15 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         res.end()
       })
       return
+    }
+
+    // Generate a fresh pairing code on demand
+    if (url.pathname === '/pairing/refresh' && req.method === 'POST') {
+      const state = loadState()
+      if (state.paired) return json(res, { error: 'already paired' }, 400)
+      const code = generatePairingCode()
+      saveState({ ...state, pairingCode: code })
+      return json(res, { code })
     }
 
     // Code-based direct pairing endpoint

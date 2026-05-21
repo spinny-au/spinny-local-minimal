@@ -340,9 +340,23 @@ function ReconnectButton() {
   )
 }
 
-function PairingTokenCard({ code }) {
+function PairingTokenCard({ code: initialCode }) {
+  const [code, setCode] = useState(initialCode)
   const [visible, setVisible] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+
+  async function showFresh() {
+    setRefreshing(true)
+    try {
+      const res = await fetch('/pairing/refresh', { method: 'POST' })
+      const data = await res.json()
+      if (data.code) setCode(data.code)
+    } catch {}
+    setRefreshing(false)
+    setVisible(true)
+  }
+
   const copy = () => {
     navigator.clipboard.writeText(code).then(() => {
       setCopied(true)
@@ -354,15 +368,20 @@ function PairingTokenCard({ code }) {
     <div className="card">
       <div className="card-title">Pairing Token</div>
       {!visible ? (
-        <button className="btn" onClick={() => setVisible(true)}>Show pairing token</button>
+        <button className="btn" onClick={showFresh} disabled={refreshing}>
+          {refreshing ? 'Generating…' : 'Show pairing token'}
+        </button>
       ) : (
         <div className="pairing-code-wrap">
           <div className="pairing-code">
             <div className="pairing-code-value">{code}</div>
             <button className="btn" onClick={copy}>{copied ? 'Copied!' : 'Copy'}</button>
+            <button className="btn" onClick={showFresh} disabled={refreshing} title="Generate new code">
+              {refreshing ? '…' : '↻'}
+            </button>
           </div>
           <div className="pairing-hint">
-            Enter this code at <a href={pairingUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>spinny.au → Settings → Local Node</a> to connect another account to this node.
+            Enter this code at <a href={pairingUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>spinny.au</a> to pair this node. A new code is generated each time.
           </div>
         </div>
       )}
