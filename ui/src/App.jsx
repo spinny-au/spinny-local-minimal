@@ -1319,6 +1319,9 @@ function AdminTab() {
   const [configBusy, setConfigBusy] = useState(false)
   const [configMsg, setConfigMsg] = useState(null)
   const [maxInput, setMaxInput] = useState('')
+  const [tailscale, setTailscale] = useState(null)
+  const [tailscaleBusy, setTailscaleBusy] = useState(false)
+  const [tailscaleMsg, setTailscaleMsg] = useState(null)
 
   const fetchPairingToken = useCallback(async () => {
     try {
@@ -1338,12 +1341,20 @@ function AdminTab() {
     } catch {}
   }, [])
 
+  const fetchTailscale = useCallback(async () => {
+    try {
+      const r = await fetch('/admin/tailscale')
+      if (r.ok) setTailscale(await r.json())
+    } catch {}
+  }, [])
+
   useEffect(() => {
     fetchPairingToken()
     fetchConfig()
+    fetchTailscale()
     const iv = setInterval(fetchPairingToken, 3000)
     return () => clearInterval(iv)
-  }, [fetchPairingToken, fetchConfig])
+  }, [fetchPairingToken, fetchConfig, fetchTailscale])
 
   const copyToken = () => {
     if (!pairingToken?.code) return
@@ -1367,6 +1378,34 @@ function AdminTab() {
       setTimeout(() => setConfigMsg(null), 2000)
     } catch (e) { setConfigMsg({ type: 'err', text: e.message }) }
     setConfigBusy(false)
+  }
+
+  async function connectTailscale() {
+    setTailscaleBusy(true); setTailscaleMsg(null)
+    try {
+      const r = await fetch('/admin/tailscale/connect', { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Tailscale setup failed')
+      setTailscale(d)
+      setTailscaleMsg({
+        type: 'ok',
+        text: d.action === 'opened-install-page'
+          ? 'Opened Tailscale download page.'
+          : 'Started Tailscale login/setup. Finish the browser prompt, then refresh status.',
+      })
+      setTimeout(fetchTailscale, 2500)
+    } catch (e) {
+      setTailscaleMsg({ type: 'err', text: e.message })
+    }
+    setTailscaleBusy(false)
+  }
+
+  function copyTailscaleUrl() {
+    if (!tailscale?.nodeUrl) return
+    navigator.clipboard.writeText(tailscale.nodeUrl).then(() => {
+      setTailscaleMsg({ type: 'ok', text: 'Copied Tailscale node URL.' })
+      setTimeout(() => setTailscaleMsg(null), 2000)
+    })
   }
 
   const remaining = pairingToken?.remaining ?? pairingToken?.ttl ?? 60
@@ -1445,6 +1484,43 @@ function AdminTab() {
             </div>
           )}
           {configMsg && <div className={`msg ${configMsg.type}`} style={{ marginTop: 8 }}>{configMsg.text}</div>}
+        </div>
+      )}
+
+      {tailscale && tailscale.supported && (
+        <div className="card">
+          <div className="card-title">Tailscale Remote Access</div>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.6 }}>
+            Optional: add this node to your Tailscale network so you can reach the local panel through a private Tailscale IP.
+          </p>
+          <div className="row">
+            <span className="row-label">Tailscale</span>
+            <span className={`badge ${tailscale.ip ? 'ok' : tailscale.installed ? '' : 'err'}`}>
+              {tailscale.ip ? `Connected: ${tailscale.ip}` : tailscale.installed ? 'Installed' : 'Not installed'}
+            </span>
+          </div>
+          {tailscale.status?.backendState && (
+            <div className="row">
+              <span className="row-label">State</span>
+              <span className="row-value">{tailscale.status.backendState}</span>
+            </div>
+          )}
+          {tailscale.nodeUrl && (
+            <div className="row">
+              <span className="row-label">Node URL</span>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
+                <span className="row-value" style={{ fontFamily: 'monospace', fontSize: 12 }}>{tailscale.nodeUrl}</span>
+                <button className="btn secondary" style={{ fontSize: 11, padding: '3px 10px' }} onClick={copyTailscaleUrl}>Copy</button>
+              </div>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+            <button className="btn" onClick={connectTailscale} disabled={tailscaleBusy}>
+              {tailscaleBusy ? 'Starting...' : tailscale.installed ? 'Connect Tailscale' : 'Install Tailscale'}
+            </button>
+            <button className="btn secondary" onClick={fetchTailscale}>Refresh status</button>
+          </div>
+          {tailscaleMsg && <div className={`msg ${tailscaleMsg.type}`} style={{ marginTop: 8 }}>{tailscaleMsg.text}</div>}
         </div>
       )}
     </>

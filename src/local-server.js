@@ -29,7 +29,7 @@ async function fetchRemoteCommit() {
 
 function spawnStream(cmd, args, cwd, onLine) {
   return new Promise(resolve => {
-    const p = spawn(cmd, args, { cwd, shell: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const p = spawn(cmd, args, { cwd, shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     const onChunk = chunk => chunk.toString().split('\n').filter(l => l.trim()).forEach(onLine)
     p.stdout.on('data', onChunk)
     p.stderr.on('data', onChunk)
@@ -38,11 +38,97 @@ function spawnStream(cmd, args, cwd, onLine) {
 }
 
 function restartProcess() {
-  const child = spawn(process.execPath, process.argv.slice(1), {
-    detached: true, stdio: 'ignore', cwd: REPO_ROOT, env: process.env,
-  })
+  const child = process.platform === 'win32'
+    ? spawn(process.execPath, process.argv.slice(1), {
+        detached: true, stdio: 'ignore', cwd: REPO_ROOT, env: process.env, windowsHide: true,
+      })
+    : spawn(process.execPath, process.argv.slice(1), {
+        detached: true, stdio: 'ignore', cwd: REPO_ROOT, env: process.env,
+      })
   child.unref()
   setTimeout(() => process.exit(0), 800)
+}
+
+function openExternal(target) {
+  try {
+    if (process.platform === 'win32') {
+      spawn('cmd.exe', ['/c', 'start', '', target], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+      return true
+    }
+    if (process.platform === 'darwin') {
+      spawn('open', [target], { detached: true, stdio: 'ignore' }).unref()
+      return true
+    }
+    spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref()
+    return true
+  } catch {
+    return false
+  }
+}
+
+function tailscaleInstallUrl() {
+  if (process.platform === 'win32') return 'https://tailscale.com/download/windows'
+  if (process.platform === 'darwin') return 'https://tailscale.com/download/mac'
+  return 'https://tailscale.com/download'
+}
+
+function tailscaleStatus() {
+  const supported = process.platform === 'win32' || process.platform === 'darwin'
+  let installed = false
+  let ip = null
+  let status = null
+  let error = null
+  try {
+    execSync('tailscale version', { timeout: 3000, stdio: 'pipe' })
+    installed = true
+  } catch (err) {
+    error = err.message
+  }
+  if (installed) {
+    try {
+      const out = execSync('tailscale ip --4', { timeout: 3000, stdio: 'pipe' }).toString().trim()
+      if (/^\d+\.\d+\.\d+\.\d+$/.test(out)) ip = out
+    } catch {}
+    try {
+      const raw = execSync('tailscale status --json', { timeout: 5000, stdio: 'pipe' }).toString()
+      const parsed = JSON.parse(raw)
+      status = {
+        backendState: parsed.BackendState || null,
+        selfName: parsed.Self?.DNSName || parsed.Self?.HostName || null,
+        online: Boolean(parsed.Self?.Online),
+      }
+    } catch {}
+  }
+  return {
+    supported,
+    platform: process.platform,
+    installed,
+    ip,
+    nodeUrl: ip ? `http://${ip}:${PORT}` : null,
+    status,
+    installUrl: tailscaleInstallUrl(),
+    error: installed ? null : error,
+  }
+}
+
+function startTailscaleSetup() {
+  const info = tailscaleStatus()
+  if (!info.supported) return { ok: false, error: 'Tailscale setup is only offered here for Windows and macOS.' }
+  if (!info.installed) {
+    openExternal(info.installUrl)
+    return { ok: true, action: 'opened-install-page', ...info }
+  }
+  try {
+    const child = spawn('tailscale', ['up'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    child.unref()
+    return { ok: true, action: 'started-tailscale-up', ...info }
+  } catch (err) {
+    return { ok: false, error: err.message, ...info }
+  }
 }
 import { loadState, saveState, generatePairingCode } from './state.js'
 import { pairNodeDirect } from './pairing.js'
@@ -830,6 +916,18 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
           paired: next.paired,
         })
       }
+    }
+
+    // Tailscale setup/status — dashboard auth required
+    if (url.pathname === '/admin/tailscale' && req.method === 'GET') {
+      if (!isDashboardAuthed(req)) return json(res, { error: 'unauthorized' }, 401)
+      return json(res, tailscaleStatus())
+    }
+
+    if (url.pathname === '/admin/tailscale/connect' && req.method === 'POST') {
+      if (!isDashboardAuthed(req)) return json(res, { error: 'unauthorized' }, 401)
+      const result = startTailscaleSetup()
+      return json(res, result, result.ok ? 200 : 400)
     }
 
     // Code-based direct pairing endpoint
