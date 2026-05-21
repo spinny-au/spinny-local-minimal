@@ -155,8 +155,11 @@ try {
       // complete pairing via signed pairNodeDirect (no direct network access needed)
       const pollTimer = setInterval(async () => {
         try {
+          // Always read current code from state — it rotates every 60s
+          const { pairingCode: currentCode, nodeId: currentNodeId } = loadState()
+          if (!currentCode) return
           const r = await fetch(
-            `${controlUrl}/api/spinny/pairing/status?code=${code}&nodeId=${state.nodeId}`,
+            `${controlUrl}/api/spinny/pairing/status?code=${currentCode}&nodeId=${currentNodeId}`,
             { signal: AbortSignal.timeout(8000) }
           );
           const body = await r.json();
