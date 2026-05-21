@@ -602,7 +602,11 @@ function StatusTab({ status, sysInfo, error }) {
           <span className="row-value">{sysInfo?.version || status.version || '—'}</span>
         </div>
       </div>
-      {!status.paired && <PairingTokenCard />}
+      {!status.paired && (
+        <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, padding: 24 }}>
+          Not paired — open the <strong style={{ color: 'var(--accent)' }}>Admin</strong> tab to get your pairing token.
+        </div>
+      )}
       {status.accountId && <AccessCard ownerEmail={status.accountId} />}
     </>
   )
@@ -1153,7 +1157,327 @@ function VaultTab() {
   )
 }
 
-const TABS = ['Status', 'Models', 'Chat', 'Vault', 'System', 'Logs', 'About']
+// ── Admin Tab ──────────────────────────────────────────────────────────────
+
+const IDLE_TIMEOUT = 10 * 60 * 1000 // 10 min
+
+function AdminTab() {
+  const SESSION_KEY = 'spinny_admin_session'
+  const [sessionToken, setSessionToken] = useState(() => sessionStorage.getItem(SESSION_KEY) || null)
+  const [authed, setAuthed] = useState(false)
+  const [checking, setChecking] = useState(true)
+
+  // Pairing token display
+  const [pairingToken, setPairingToken] = useState(null)
+  const [tokenVisible, setTokenVisible] = useState(false)
+  const [tokenCopied, setTokenCopied] = useState(false)
+
+  // Auth form
+  const [authInput, setAuthInput] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authMsg, setAuthMsg] = useState(null)
+  const [lockoutSecs, setLockoutSecs] = useState(0)
+
+  // Config
+  const [config, setConfig] = useState(null)
+  const [configBusy, setConfigBusy] = useState(false)
+  const [configMsg, setConfigMsg] = useState(null)
+  const [maxInput, setMaxInput] = useState('')
+
+  // Cloud key generate
+  const [cloudKeyNodeId, setCloudKeyNodeId] = useState('')
+  const [cloudKeyBusy, setCloudKeyBusy] = useState(false)
+  const [cloudKeyMsg, setCloudKeyMsg] = useState(null)
+
+  // Idle timer
+  const idleTimer = React.useRef(null)
+
+  const resetIdle = useCallback(() => {
+    clearTimeout(idleTimer.current)
+    idleTimer.current = setTimeout(() => {
+      sessionStorage.removeItem(SESSION_KEY)
+      setSessionToken(null)
+      setAuthed(false)
+    }, IDLE_TIMEOUT)
+  }, [])
+
+  const lock = useCallback(() => {
+    clearTimeout(idleTimer.current)
+    sessionStorage.removeItem(SESSION_KEY)
+    setSessionToken(null)
+    setAuthed(false)
+    setAuthMsg(null)
+  }, [])
+
+  // Verify existing session on mount
+  useEffect(() => {
+    if (!sessionToken) { setChecking(false); return }
+    fetch('/admin/session', { headers: { 'x-admin-session': sessionToken } })
+      .then(r => r.json())
+      .then(d => {
+        if (d.valid) { setAuthed(true); resetIdle() }
+        else { sessionStorage.removeItem(SESSION_KEY); setSessionToken(null) }
+      })
+      .catch(() => { sessionStorage.removeItem(SESSION_KEY); setSessionToken(null) })
+      .finally(() => setChecking(false))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll pairing token when authed
+  const fetchPairingToken = useCallback(async () => {
+    if (!sessionToken) return
+    try {
+      const r = await fetch('/pairing/token', { headers: { 'x-admin-session': sessionToken } })
+      if (r.ok) setPairingToken(await r.json())
+    } catch {}
+  }, [sessionToken])
+
+  useEffect(() => {
+    if (!authed) return
+    fetchPairingToken()
+    const iv = setInterval(fetchPairingToken, 3000)
+    return () => clearInterval(iv)
+  }, [authed, fetchPairingToken])
+
+  // Load config when authed
+  const fetchConfig = useCallback(async () => {
+    if (!sessionToken) return
+    try {
+      const r = await fetch('/admin/config', { headers: { 'x-admin-session': sessionToken } })
+      if (r.ok) {
+        const d = await r.json()
+        setConfig(d)
+        setMaxInput(String(d.maxPairedAccounts ?? 1))
+      }
+    } catch {}
+  }, [sessionToken])
+
+  useEffect(() => {
+    if (authed) fetchConfig()
+  }, [authed, fetchConfig])
+
+  // Activity tracking for idle lock
+  useEffect(() => {
+    if (!authed) return
+    const ev = ['click', 'keydown', 'pointermove']
+    const h = () => resetIdle()
+    ev.forEach(e => window.addEventListener(e, h))
+    resetIdle()
+    return () => { ev.forEach(e => window.removeEventListener(e, h)); clearTimeout(idleTimer.current) }
+  }, [authed, resetIdle])
+
+  async function doAuth() {
+    const key = authInput.trim()
+    if (!key || authBusy) return
+    setAuthBusy(true); setAuthMsg(null)
+    try {
+      const r = await fetch('/admin/auth', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      })
+      const d = await r.json()
+      if (!r.ok) {
+        if (r.status === 429) {
+          setLockoutSecs(d.retryAfter || 900)
+          const tick = setInterval(() => {
+            setLockoutSecs(s => { if (s <= 1) { clearInterval(tick); return 0 } return s - 1 })
+          }, 1000)
+        }
+        setAuthMsg({ type: 'err', text: d.error || 'Authentication failed' })
+      } else {
+        const tok = d.sessionToken
+        sessionStorage.setItem(SESSION_KEY, tok)
+        setSessionToken(tok)
+        setAuthed(true)
+        setAuthInput('')
+        resetIdle()
+      }
+    } catch (e) {
+      setAuthMsg({ type: 'err', text: e.message })
+    }
+    setAuthBusy(false)
+  }
+
+  async function saveConfig(patch) {
+    setConfigBusy(true); setConfigMsg(null)
+    try {
+      const r = await fetch('/admin/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-admin-session': sessionToken },
+        body: JSON.stringify(patch),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Failed')
+      setConfig(d)
+      setMaxInput(String(d.maxPairedAccounts ?? 1))
+      setConfigMsg({ type: 'ok', text: 'Saved' })
+      setTimeout(() => setConfigMsg(null), 2000)
+    } catch (e) { setConfigMsg({ type: 'err', text: e.message }) }
+    setConfigBusy(false)
+  }
+
+  async function burnInitial() {
+    try {
+      await fetch('/admin/burn-initial', { method: 'POST', headers: { 'x-admin-session': sessionToken } })
+      await fetchConfig()
+    } catch {}
+  }
+
+  async function generateCloudKey() {
+    const nodeId = cloudKeyNodeId.trim()
+    if (!nodeId) return
+    setCloudKeyBusy(true); setCloudKeyMsg(null)
+    try {
+      const r = await fetch(`/api/spinny/local-nodes/${encodeURIComponent(nodeId)}/admin-key`, { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Failed')
+      setCloudKeyMsg({ type: 'ok', text: `Key generated: ${d.key} (expires in ${d.expiresIn}s)` })
+    } catch (e) { setCloudKeyMsg({ type: 'err', text: e.message }) }
+    setCloudKeyBusy(false)
+  }
+
+  const copyToken = () => {
+    if (!pairingToken?.code) return
+    navigator.clipboard.writeText(pairingToken.code).then(() => {
+      setTokenCopied(true); setTimeout(() => setTokenCopied(false), 2000)
+    })
+  }
+
+  if (checking) return <div className="loading">Checking session…</div>
+
+  if (!authed) {
+    return (
+      <div className="card" style={{ maxWidth: 420 }}>
+        <div className="card-title">Admin Access</div>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20, lineHeight: 1.6 }}>
+          Enter your admin token (shown at install) or a one-time key generated from spinny.au.
+        </p>
+        <input
+          type="password"
+          className="install-input"
+          placeholder="sadmin_… or initial token"
+          value={authInput}
+          onChange={e => setAuthInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && !lockoutSecs && doAuth()}
+          disabled={authBusy || lockoutSecs > 0}
+          autoFocus
+          style={{ width: '100%', marginBottom: 10 }}
+        />
+        <button className="btn" style={{ width: '100%' }} onClick={doAuth} disabled={authBusy || !authInput.trim() || lockoutSecs > 0}>
+          {authBusy ? 'Checking…' : lockoutSecs > 0 ? `Locked out (${lockoutSecs}s)` : 'Unlock Admin'}
+        </button>
+        {authMsg && <div className={`msg ${authMsg.type}`} style={{ marginTop: 10 }}>{authMsg.text}</div>}
+      </div>
+    )
+  }
+
+  const remaining = pairingToken?.remaining ?? pairingToken?.ttl ?? 60
+  const ttl = pairingToken?.ttl ?? 60
+  const setupDone = config?.initialAdminSetupDone
+
+  return (
+    <>
+      {/* Pairing token */}
+      <div className="card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div className="card-title" style={{ margin: 0 }}>Pairing Token</div>
+          <button className="btn secondary" style={{ fontSize: 11, padding: '3px 10px' }} onClick={lock}>Lock</button>
+        </div>
+        {pairingToken ? (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <TotpRing remaining={remaining} ttl={ttl} />
+              <div style={{ fontFamily: 'monospace', fontSize: 28, fontWeight: 700, letterSpacing: '0.18em', flex: 1, color: 'var(--text)' }}>
+                {tokenVisible ? (pairingToken.code || '——') : '••••••'}
+              </div>
+              <button className="btn" onClick={() => setTokenVisible(v => !v)} style={{ fontSize: 16, padding: '6px 10px' }}>
+                {tokenVisible ? '🙈' : '👁'}
+              </button>
+              <button className="btn" onClick={copyToken} disabled={!tokenVisible}>{tokenCopied ? '✓' : 'Copy'}</button>
+            </div>
+            <div className="pairing-hint" style={{ marginTop: 8 }}>
+              {pairingToken.pairedCount >= pairingToken.maxPairedAccounts
+                ? `${pairingToken.pairedCount}/${pairingToken.maxPairedAccounts} accounts paired.`
+                : `Rotates every ${ttl}s — enter at spinny.au to pair. ${pairingToken.pairedCount ?? 0}/${pairingToken.maxPairedAccounts ?? 1} account(s) paired.`}
+            </div>
+            {!setupDone && (
+              <div style={{ marginTop: 12, padding: 10, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 6, fontSize: 12, color: 'var(--warn)' }}>
+                Initial token still active. After pairing, click below to burn it permanently.
+                <button className="btn" style={{ marginLeft: 12, fontSize: 11, padding: '2px 10px', background: 'var(--warn)' }} onClick={burnInitial}>
+                  Burn Initial Token
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Node is fully paired — no token active.</div>
+        )}
+      </div>
+
+      {/* Access config */}
+      {config && (
+        <div className="card">
+          <div className="card-title">Node Access</div>
+          <div className="row">
+            <span className="row-label">Multi-account</span>
+            <button
+              className={`btn${config.multiAccount ? '' : ' secondary'}`}
+              style={{ fontSize: 11, padding: '3px 12px' }}
+              disabled={configBusy}
+              onClick={() => saveConfig({ multiAccount: !config.multiAccount })}
+            >
+              {config.multiAccount ? 'On' : 'Off'}
+            </button>
+          </div>
+          {config.multiAccount && (
+            <div className="row">
+              <span className="row-label">Max accounts</span>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="number" min={1} max={50}
+                  className="install-input"
+                  style={{ width: 64, textAlign: 'center', padding: '4px 8px' }}
+                  value={maxInput}
+                  onChange={e => setMaxInput(e.target.value)}
+                />
+                <button className="btn" style={{ fontSize: 11, padding: '3px 12px' }} disabled={configBusy}
+                  onClick={() => saveConfig({ maxPairedAccounts: parseInt(maxInput) || 1 })}>
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+          {config.multiAccount && (
+            <div className="row">
+              <span className="row-label">Lock</span>
+              <button
+                className={`btn${config.locked ? '' : ' secondary'}`}
+                style={{ fontSize: 11, padding: '3px 12px', ...(config.locked ? { background: 'var(--err)' } : {}) }}
+                disabled={configBusy}
+                onClick={() => saveConfig({ locked: !config.locked })}
+              >
+                {config.locked ? '🔒 Locked' : '🔓 Unlocked'}
+              </button>
+            </div>
+          )}
+          {configMsg && <div className={`msg ${configMsg.type}`} style={{ marginTop: 8 }}>{configMsg.text}</div>}
+        </div>
+      )}
+
+      {/* Generate cloud key (for spinny.au node page) */}
+      <div className="card">
+        <div className="card-title">One-time Admin Key</div>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.6 }}>
+          After pairing, future admin sessions require a one-time key from spinny.au — generate it there under your node's settings.
+        </p>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          Visit <strong style={{ color: 'var(--accent)' }}>spinny.au</strong> → your node → Admin Key to generate.
+        </div>
+        {cloudKeyMsg && <div className={`msg ${cloudKeyMsg.type}`} style={{ marginTop: 8, wordBreak: 'break-all' }}>{cloudKeyMsg.text}</div>}
+      </div>
+    </>
+  )
+}
+
+const TABS = ['Status', 'Models', 'Chat', 'Vault', 'System', 'Logs', 'Admin', 'About']
 
 export function App() {
   const [tab, setTab] = useState('Status')
@@ -1192,6 +1516,7 @@ export function App() {
           {tab === 'Vault'  && <VaultTab />}
           {tab === 'System' && <SystemTab sysInfo={sysInfo} error={sysErr} />}
           {tab === 'Logs'  && <LogsTab />}
+          {tab === 'Admin' && <AdminTab />}
           {tab === 'About' && <AboutTab sysInfo={sysInfo} />}
           {tab === 'Update' && <UpdateTab localVersion={updateInfo?.localVersion} remoteVersion={updateInfo?.remoteVersion} />}
         </div>

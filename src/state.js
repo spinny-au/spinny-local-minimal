@@ -34,6 +34,7 @@ const DEFAULT_STATE = {
   locked: false,
   allowedUsers: [],
   pendingRequests: [],
+  initialAdminSetupDone: false,
 };
 
 export function generatePairingCode() {
