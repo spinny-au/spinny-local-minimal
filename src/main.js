@@ -76,7 +76,8 @@ try {
 
     if (!state.paired) {
       const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
-      const ROTATE_MS = 60 * 1000
+      const ROTATE_MS = 10 * 60 * 1000
+      let pairingClaimSeen = false
 
       function needsMorePairings(s) {
         if (!s.multiAccount) return !s.paired
@@ -85,17 +86,21 @@ try {
 
       async function rotateCode() {
         const s = loadState()
+        if (pairingClaimSeen) return
         if (!needsMorePairings(s)) return
         const code = generatePairingCode()
         saveState({ ...s, pairingCode: code, pairingCodeIssuedAt: Date.now() })
         try {
-          await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
+          const r = await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pairingCode: code, nodeId: s.nodeId }),
             signal: AbortSignal.timeout(8000),
           })
-        } catch {}
+          console.log(`[relay-pair] advertise ${code} -> ${r.status}`)
+        } catch (err) {
+          console.error('[relay-pair] advertise failed:', err.message)
+        }
       }
 
       // Fresh code on startup — always regenerate, stale codes are expired in cloud DB
@@ -134,22 +139,6 @@ try {
 
       startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
 
-      // Advertise pairing code to spinny.au so users can pair without direct access
-      const advertise = async () => {
-        try {
-          const r = await fetch(`${controlUrl}/api/spinny/pairing/advertise`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pairingCode: code, nodeId: state.nodeId }),
-            signal: AbortSignal.timeout(10000),
-          });
-          console.log(`[relay-pair] advertise → ${r.status}`);
-        } catch (err) {
-          console.error('[relay-pair] advertise failed:', err.message);
-        }
-      };
-      await advertise();
-      const advertiseTimer = setInterval(advertise, 4 * 60 * 1000); // refresh before 15min TTL
 
       // Poll spinny.au for claim — when someone enters the code on spinny.au,
       // complete pairing via signed pairNodeDirect (no direct network access needed)
@@ -165,11 +154,12 @@ try {
           const body = await r.json();
           if (!r.ok) { console.error('[relay-pair] poll error:', r.status, body); return; }
           if (body.claimed && body.accountEmail) {
+            pairingClaimSeen = true
+            clearInterval(rotateTimer)
             console.log(`[relay-pair] claimed by ${body.accountEmail} — completing pairing…`);
             try {
-              const result = await pairNodeDirect({ accountEmail: body.accountEmail, controlUrl });
+              const result = await pairNodeDirect({ accountEmail: body.accountEmail, pairingCode: currentCode, controlUrl });
               clearInterval(pollTimer);
-              clearInterval(advertiseTimer);
               console.log(`[relay-pair] paired! Account: ${result.accountId}`);
               pairingResolver?.(result);
             } catch (err) {
@@ -185,7 +175,6 @@ try {
       const pairingPromise = new Promise(resolve => { pairingResolver = resolve });
       await pairingPromise;
       clearInterval(pollTimer);
-      clearInterval(advertiseTimer);
     } else {
       // Already paired — start tray immediately
       startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});

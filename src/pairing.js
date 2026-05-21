@@ -12,7 +12,7 @@ function gitFingerprint() {
   }
 }
 
-export async function pairNodeDirect({ accountEmail, controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au" }) {
+export async function pairNodeDirect({ accountEmail, pairingCode, controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au" }) {
   if (!accountEmail) throw new Error("accountEmail is required");
   const identity = ensureNodeIdentity();
   const state = saveState(loadState());
@@ -21,6 +21,7 @@ export async function pairNodeDirect({ accountEmail, controlUrl = process.env.SP
     nodeName: state.nodeName || null,
     nodePublicKey: identity.publicKeyDer,
     accountEmail,
+    pairingCode: pairingCode || state.pairingCode || null,
     client: "spinny-local-minimal",
     version: "0.1.0",
     ...gitFingerprint(),
