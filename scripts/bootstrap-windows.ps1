@@ -7,7 +7,7 @@
 # Update only (keeps pairing):
 #   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/spinny-au/spinny-local-minimal/main/scripts/bootstrap-windows.ps1'))) --update
 
-$INSTALLER_VERSION = '2026-05-21.2'
+$INSTALLER_VERSION = '2026-05-21.3'
 
 $isFresh  = $args -contains '--fresh'  -or $args -contains '-fresh'
 $isUpdate = $args -contains '--update' -or $args -contains '-update'
@@ -232,18 +232,16 @@ try {
 '' | Set-Content $logPath -Encoding UTF8 -EA SilentlyContinue
 
 step 'Starting node'
+# Always use Start-Process for the immediate launch — Start-ScheduledTask runs in
+# a restricted session and silently fails to execute the launcher on some machines.
+# The Task Scheduler registration above is for auto-start at login only.
+Start-Process 'powershell.exe' `
+    -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" `
+    -WorkingDirectory $INSTALL_DIR
 if ($taskRegistered) {
-    try {
-        Start-ScheduledTask -TaskName $TASK_NAME -EA Stop
-        ok 'Node started via Task Scheduler'
-    } catch {
-        warn 'Task start failed — launching directly'
-        Start-Process 'powershell.exe' -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" -WorkingDirectory $INSTALL_DIR
-        ok 'Node started in background'
-    }
+    ok 'Node started — will also auto-start at every login via Task Scheduler'
 } else {
-    Start-Process 'powershell.exe' -ArgumentList "-WindowStyle Hidden -NonInteractive -NoProfile -File `"$launcherPath`"" -WorkingDirectory $INSTALL_DIR
-    ok 'Node started in background (no auto-start — re-run as Admin for that)'
+    ok 'Node started in background (re-run as Admin to enable auto-start at login)'
 }
 
 # ── 11. Wait for pairing code ─────────────────────────────────────────────────
