@@ -114,8 +114,10 @@ export function getSystemInfo() {
   } catch {}
 
   const serveUrl = process.env.SPINNY_SERVE_URL || null
+  const nodeName = (process.env.SPINNY_NODE_NAME || '').trim() || null
 
   return {
+    nodeName,
     hostname: os.hostname(),
     platform: os.platform(),
     release: os.release(),

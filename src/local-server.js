@@ -299,7 +299,8 @@ function isTrustedOrigin(req) {
 
 const PORT = 47821
 const UI_DIST = join(import.meta.dirname, '..', 'ui', 'dist')
-const DASHBOARD_TOKEN = process.env.SPINNY_DASHBOARD_TOKEN || null
+const DASHBOARD_TOKEN = (process.env.SPINNY_DASHBOARD_TOKEN || '').trim() || null
+const NODE_NAME = (process.env.SPINNY_NODE_NAME || '').trim() || null
 
 function parseCookies(header) {
   const out = {}
@@ -437,7 +438,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     if (url.pathname === '/health') {
       const state = loadState()
       const serveUrl = process.env.SPINNY_SERVE_URL || null
-      return json(res, { ok: true, nodeId: state.nodeId, paired: state.paired, serveUrl })
+      return json(res, { ok: true, nodeId: state.nodeId, paired: state.paired, serveUrl, nodeName: NODE_NAME })
     }
 
     // API status
@@ -1364,13 +1365,16 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       const body = await readBody(req)
       const params = new URLSearchParams(body)
       const token = params.get('token') || ''
-      if (DASHBOARD_TOKEN && token !== DASHBOARD_TOKEN) {
+      if (DASHBOARD_TOKEN && token.trim() !== DASHBOARD_TOKEN) {
         res.writeHead(200, { 'Content-Type': 'text/html' })
         return res.end(LOGIN_PAGE('Invalid token — try again'))
       }
       const maxAge = 60 * 60 * 24 * 30 // 30 days
+      // Add Secure flag when accessed via HTTPS (tailscale serve sets X-Forwarded-Proto)
+      const isHttps = req.headers['x-forwarded-proto'] === 'https'
+      const secureFlag = isHttps ? '; Secure' : ''
       res.writeHead(302, {
-        'Set-Cookie': `spinny_dash=${DASHBOARD_TOKEN || ''}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+        'Set-Cookie': `spinny_dash=${DASHBOARD_TOKEN || ''}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureFlag}`,
         'Location': '/'
       })
       return res.end()
