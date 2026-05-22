@@ -58,7 +58,8 @@ async function claimTask() {
         if (data.task) console.log(`[relay-infer] claimed task ${data.task.taskId}`)
         return data.task || null
       }
-      console.log(`[relay-infer] claim got HTTP ${res.status} (attempt ${attempt + 1})`)
+      const body = await res.json().catch(() => ({}))
+      console.log(`[relay-infer] claim got HTTP ${res.status} (attempt ${attempt + 1}) reason=${body.reason || '?'} hash=${body.hashPreview || '?'}`)
       if (await renewTokenIf401(res.status)) continue
       return null
     } catch (err) {
