@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { loadState } from './state.js'
 import { OllamaClient } from './ollama.js'
+import { attemptReconnect } from './relay.js'
 
 const POLL_INTERVAL = 1000
 const TOKEN_BATCH_CHARS = 120
@@ -18,20 +19,39 @@ function nodeHeaders() {
   }
 }
 
+let _renewInProgress = false
+async function renewTokenIf401(status) {
+  if (status !== 401 || _renewInProgress) return false
+  _renewInProgress = true
+  try {
+    console.log('[relay-infer] got 401 — forcing token renewal')
+    const r = await attemptReconnect({ controlUrl: loadState().controlUrl, force: true })
+    if (r.reconnected) { console.log('[relay-infer] token renewed — retrying'); return true }
+    console.log('[relay-infer] token renewal failed — re-pair required')
+    return false
+  } finally { _renewInProgress = false }
+}
+
 async function claimTask() {
   const { nodeId, paired, relaySessionToken } = loadState()
   if (!paired || !nodeId || !relaySessionToken) return null
-  try {
-    const res = await fetch(`${baseUrl()}/api/relay/tasks/pending`, {
-      headers: nodeHeaders(),
-      signal: AbortSignal.timeout(5000),
-    })
-    if (!res.ok) return null
-    const data = await res.json()
-    return data.task || null
-  } catch {
-    return null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`${baseUrl()}/api/relay/tasks/pending`, {
+        headers: nodeHeaders(),
+        signal: AbortSignal.timeout(5000),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        return data.task || null
+      }
+      if (await renewTokenIf401(res.status)) continue
+      return null
+    } catch {
+      return null
+    }
   }
+  return null
 }
 
 async function postChunk(taskId, chunk) {
@@ -44,6 +64,7 @@ async function postChunk(taskId, chunk) {
         signal: AbortSignal.timeout(10000),
       })
       if (res.ok) return true
+      if (await renewTokenIf401(res.status)) continue
     } catch {}
     if (attempt < 2) await new Promise(r => setTimeout(r, 1000))
   }
