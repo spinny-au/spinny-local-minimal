@@ -65,7 +65,7 @@ async function claimTask() {
         const data = await res.json()
         if (data.task) {
           console.log(`[relay-infer] claimed task ${data.task.taskId}`)
-          logEvent('info', 'task', `chunk:${data.task.taskId}`, `claimed ${data.task.type || 'task'}`)
+          logEvent('info', 'relay', 'infer', `claimed ${data.task.type || 'task'} ${data.task.taskId}`)
         }
         return data.task || null
       }

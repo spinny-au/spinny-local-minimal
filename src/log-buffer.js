@@ -1,3 +1,5 @@
+import { logConsoleEvent } from './log-streamer.js';
+
 const MAX = 500;
 const lines = [];
 
@@ -12,8 +14,9 @@ export function getLines(n = 200) {
 }
 
 export function interceptConsole() {
-  const orig = { log: console.log, warn: console.warn, error: console.error };
-  console.log   = (...a) => { push('log',   a); orig.log(...a);   };
-  console.warn  = (...a) => { push('warn',  a); orig.warn(...a);  };
-  console.error = (...a) => { push('error', a); orig.error(...a); };
+  const orig = { log: console.log, info: console.info, warn: console.warn, error: console.error };
+  console.log   = (...a) => { push('log',   a); logConsoleEvent('info',  a); orig.log(...a);   };
+  console.info  = (...a) => { push('info',  a); logConsoleEvent('info',  a); orig.info(...a);  };
+  console.warn  = (...a) => { push('warn',  a); logConsoleEvent('warn',  a); orig.warn(...a);  };
+  console.error = (...a) => { push('error', a); logConsoleEvent('error', a); orig.error(...a); };
 }

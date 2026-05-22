@@ -110,6 +110,23 @@ The relay exposes:
 
 The relay is intentionally dumb. It forwards signed envelopes and tracks presence. It does not perform Spinny routing policy or task business logic.
 
+## Realtime Logs
+
+The local node streams its recent logs to `spinny.au` for the account owner. Open `spinny.au`, sign in, and use the `Live Logs` button to tail any paired node.
+
+`src/log-buffer.js` captures `console.log`, `console.info`, `console.warn`, and `console.error`; `src/log-streamer.js` batches them to `/api/relay/logs` with the relay session token. Child process stderr is captured for model pulls, Ollama installs, updates, and tray helpers. The uploader keeps a bounded 500-line ring, retries on reconnect, and can be disabled with `SPINNY_LOG_STREAM=off`.
+
+Structured subsystems should call:
+
+```js
+import { logEvent } from './src/log-streamer.js'
+
+logEvent('info', 'vertical', 'email', 'processed 5 emails')
+logEvent('warn', 'task', `subagent:${id}`, 'retrying run')
+```
+
+Use `source` for the subsystem class (`console`, `stderr`, `http`, `relay`, `task`, `vertical`) and `tag` for the specific feature (`email`, `calendar`, `infer`, `chunk:<taskId>`). Secrets matching relay tokens, bearer tokens, OpenAI-style keys, OAuth codes, and JWTs are masked before logs leave the node.
+
 ## Security Boundary
 
 The pairing token is for authentication only. It is never used as an encryption key.

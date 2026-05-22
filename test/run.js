@@ -28,6 +28,7 @@ import {
   readReceipts,
   savePrivacyPolicy
 } from "../src/instruction-handler.js";
+import { logEvent, parseConsoleTag, scrubSecrets, stopLogStreamer } from "../src/log-streamer.js";
 
 const tests = [];
 
@@ -45,6 +46,19 @@ test("vault encrypts and decrypts JSON values", () => {
 
 test("canonicalJson is stable for signature payloads", () => {
   assert.equal(canonicalJson({ b: 2, a: 1 }), canonicalJson({ a: 1, b: 2 }));
+});
+
+test("log streamer scrubs secrets and parses console tags", () => {
+  stopLogStreamer();
+  const parsed = parseConsoleTag("[relay-infer] Bearer srly_supersecret123");
+  assert.equal(parsed.tag, "relay-infer");
+  assert.equal(scrubSecrets("Authorization: Bearer srly_supersecret123"), "Authorization: Bearer [redacted]");
+  const entry = logEvent("log", "vertical", "email", "sent with sk-abc123456789 and jwt eyJaaaaaaaaaa.eyJbbbbbbbbbb.cccccccccccc");
+  assert.equal(entry.level, "info");
+  assert.equal(entry.source, "vertical");
+  assert.equal(entry.tag, "email");
+  assert.match(entry.message, /sk-\[redacted\]/);
+  assert.match(entry.message, /\[jwt:redacted\]/);
 });
 
 test("node identity signs and verifies task envelopes", () => {

@@ -55,6 +55,7 @@ function spawnStream(cmd, args, cwd, onLine) {
   return new Promise(resolve => {
     const resolved = resolveSpawnCommand(cmd, args)
     const p = spawn(resolved.cmd, resolved.args, { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    captureChildStderr(p, cmd)
     const onChunk = chunk => chunk.toString().split('\n').filter(l => l.trim()).forEach(onLine)
     let settled = false
     p.stdout.on('data', onChunk)
@@ -231,6 +232,7 @@ import { ensureNodeIdentity } from './identity.js'
 import { pairNodeDirect, requestPairing } from './pairing.js'
 import { getSystemInfo } from './system-info.js'
 import { getLines } from './log-buffer.js'
+import { captureChildStderr, logEvent } from './log-streamer.js'
 import { Vault } from './vault.js'
 import { exportModelBundle, importModelBundle, importModelBundleFromUrl, getBundleReadStream } from './model-bundles.js'
 import {
@@ -408,6 +410,7 @@ async function readJsonBody(req) {
 export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getRelay } = {}) {
   const handler = async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`)
+    if (url.pathname !== '/health') logEvent('info', 'http', url.pathname, `${req.method} ${url.pathname}`)
     const reqOrigin = req.headers.origin || ''
     // Origin-aware corsSpinny for this specific request — reflects www or bare back correctly
     const corsSpinnyReq = (r) => corsSpinny(r, reqOrigin)
@@ -921,7 +924,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
 
         const stripAnsi = s => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\r/g, '')
 
-        const proc = spawn('ollama', ['pull', model], { stdio: ['ignore', 'pipe', 'pipe'] })
+        const proc = captureChildStderr(spawn('ollama', ['pull', model], { stdio: ['ignore', 'pipe', 'pipe'] }), 'ollama.pull')
         const onData = (chunk) => {
           const lines = chunk.toString().split(/\r?\n/).map(stripAnsi).filter(l => l.trim())
           for (const line of lines) {
