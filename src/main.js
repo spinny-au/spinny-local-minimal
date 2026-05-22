@@ -316,6 +316,16 @@ try {
 
     console.log("Spinny local node running.");
 
+  } else if (command === "pairingcode") {
+    const state = loadState()
+    if (state.paired) {
+      console.log(JSON.stringify({ paired: true, accountId: state.accountId }, null, 2))
+    } else if (state.pairingCode) {
+      console.log(JSON.stringify({ paired: false, pairingCode: state.pairingCode, url: `https://spinny.au/?localcode=${state.pairingCode}` }, null, 2))
+    } else {
+      console.log(JSON.stringify({ paired: false, pairingCode: null, message: 'Start the daemon first: systemctl --user start spinny-local-minimal' }, null, 2))
+    }
+
   } else if (command === "repair") {
     const state = loadState();
     const relayUrl = process.env.SPINNY_RELAY_URL || null;

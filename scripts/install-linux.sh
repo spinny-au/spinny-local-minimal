@@ -594,16 +594,6 @@ printf "  %-18s: %s\n"                                   "Status"    "$STATUS_ST
 echo ""
 printf "  %-18s: http://localhost:%s\n" "Node UI" "$NODE_PORT"
 echo ""
-if $PAIRED; then
-  printf "  %-18s: already paired ✓\n" "Pairing"
-else
-  echo ""
-  echo -e "${Y}${B}╔══════════════════════════════════════╗${RST}"
-  echo -e "${Y}${B}║   PAIRING CODE  →   ${PAIRING_CODE}           ║${RST}"
-  echo -e "${Y}${B}╚══════════════════════════════════════╝${RST}"
-  echo -e "  Enter ${B}${PAIRING_CODE}${RST} at ${B}spinny.au${RST} → Settings → Local Node"
-  echo ""
-fi
 echo ""
 printf "  %-18s: " "Dashboard token"
 echo -e "${Y}${B}${DASH_TOKEN}${RST}"
@@ -618,14 +608,75 @@ else
   echo -e "  ${Y}○ Port ${NODE_PORT} not yet reachable — node is still starting${RST}"
 fi
 echo -e "${DIM}${LINE}${RST}"
-echo -e "  Node is ready. Open ${B}spinny.au${RST} and enter your pairing code."
-echo -e "${DIM}${LINE}${RST}"
-echo ""
 
-if ! $PAIRED && [[ -n "$PAIRING_CODE" ]]; then
+if $PAIRED; then
+  echo -e "  ${G}${B}✓ Already paired. Open spinny.au to start using Spinny.${RST}"
+  echo -e "${DIM}${LINE}${RST}"
   echo ""
-  echo -e "${Y}${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
-  echo -e "${Y}${B}  PAIR THIS NODE AT SPINNY.AU  →  CODE: ${PAIRING_CODE}${RST}"
-  echo -e "${Y}${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
+else
+  echo -e "  Node is ready. ${B}Enter your spinny.au email to pair this node:${RST}"
+  echo -e "${DIM}${LINE}${RST}"
   echo ""
+
+  PAIR_EMAIL=""
+  PAIR_SUCCESS=false
+
+  if [[ -t 0 ]]; then
+    read -rp "  Email: " PAIR_EMAIL
+    PAIR_EMAIL=$(echo "$PAIR_EMAIL" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+  fi
+
+  if [[ -z "$PAIR_EMAIL" || "$PAIR_EMAIL" != *@* ]]; then
+    warn "No email entered — pair later with: spinny pairme2 <email>"
+    echo -e "  ${DIM}Backup: enter code ${B}${PAIRING_CODE}${RST}${DIM} at spinny.au → Settings → Local Node${RST}"
+    echo ""
+  else
+    echo ""
+    echo -e "  ${C}Sending pairing request to ${B}${PAIR_EMAIL}${RST}${C}...${RST}"
+    echo ""
+
+    cd "$INSTALL_DIR"
+    "$NODE_BIN" --experimental-sqlite --no-warnings --env-file-if-exists=.env \
+      src/main.js pairme2 "$PAIR_EMAIL" >/tmp/spinny-pairme2.log 2>&1 &
+    PAIRME2_PID=$!
+
+    printf "  ${Y}Waiting for approval on spinny.au${RST}"
+    for i in $(seq 1 180); do
+      sleep 1
+      if [[ -f "$STATE_FILE" ]]; then
+        IS_PAIRED=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print('yes' if d.get('paired') else '')" 2>/dev/null || true)
+        [[ "$IS_PAIRED" == "yes" ]] && PAIR_SUCCESS=true && break
+      fi
+      [[ $((i % 2)) -eq 0 ]] && printf "."
+    done
+
+    kill "$PAIRME2_PID" 2>/dev/null || true
+    wait "$PAIRME2_PID" 2>/dev/null || true
+    echo ""
+    echo ""
+
+    if $PAIR_SUCCESS; then
+      PAIRED_AS=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('accountId',''))" 2>/dev/null || echo "$PAIR_EMAIL")
+      echo -e "${DIM}${LINE}${RST}"
+      echo -e "  ${G}${B}✓ Node paired as ${PAIRED_AS}${RST}"
+      echo -e "${DIM}${LINE}${RST}"
+      echo ""
+      echo -e "  ${B}Your node is live at spinny.au${RST}"
+      echo ""
+      echo -e "  ${DIM}Pair again later  : ${B}spinny pairme2 ${PAIR_EMAIL}${RST}"
+      echo -e "  ${DIM}Get pairing code  : ${B}spinny pairingcode${RST}"
+      echo ""
+    else
+      echo -e "${DIM}${LINE}${RST}"
+      echo -e "  ${Y}${B}⚠  Approval pending — open spinny.au to approve${RST}"
+      echo -e "${DIM}${LINE}${RST}"
+      echo ""
+      echo -e "  The request was sent to ${B}${PAIR_EMAIL}${RST}."
+      echo -e "  Open ${B}spinny.au${RST}, go to Settings → Local Node and approve it."
+      echo ""
+      echo -e "  ${DIM}Backup code: ${B}${PAIRING_CODE}${RST}${DIM} (spinny.au → Settings → Local Node → Connect)${RST}"
+      echo -e "  ${DIM}Once approved the node goes online automatically.${RST}"
+      echo ""
+    fi
+  fi
 fi
