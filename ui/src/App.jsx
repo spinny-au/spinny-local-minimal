@@ -4,30 +4,19 @@ function renderMarkdown(text) {
   if (!text) return ''
   let html = text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // code blocks first
     .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
       `<pre><code>${code.trimEnd()}</code></pre>`)
-    // inline code
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    // headings
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
     .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    // bold + italic
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // hr
     .replace(/^---+$/gm, '<hr>')
-    // unordered list items
     .replace(/^[\*\-] (.+)$/gm, '<li>$1</li>')
-    // ordered list items
     .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
-    // wrap consecutive <li> in <ul>
-    .replace(/(<li>[\s\S]*?<\/li>)(\n(?=<li>)|(?![\s\S]))/g, '$1')
-  // wrap <li> blocks in <ul>
   html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>')
-  // paragraphs: blank-line separated blocks not already wrapped in block tags
   const blockTag = /^<(h[1-6]|ul|ol|pre|hr|blockquote)/
   html = html.split(/\n\n+/).map(block => {
     block = block.trim()
@@ -36,6 +25,57 @@ function renderMarkdown(text) {
     return `<p>${block.replace(/\n/g, '<br>')}</p>`
   }).join('\n')
   return html
+}
+
+// Parse :::buttons [A] [B] or :::actions {...} blocks out of message content
+// Returns { text: string, actions: Array<{type,items}> }
+function parseActions(content) {
+  if (!content) return { text: content, actions: [] }
+  const actions = []
+  const text = content.replace(/:::buttons\s*\n([\s\S]*?)\n?:::/g, (_, inner) => {
+    const items = [...inner.matchAll(/\[([^\]]+)\]/g)].map(m => ({ label: m[1], value: m[1] }))
+    if (items.length) actions.push({ type: 'buttons', items })
+    return ''
+  }).replace(/:::actions\s*(\{[\s\S]*?\})\s*:::/g, (_, json) => {
+    try {
+      const parsed = JSON.parse(json)
+      if (parsed.type && Array.isArray(parsed.items)) actions.push(parsed)
+    } catch {}
+    return ''
+  }).trim()
+  return { text, actions }
+}
+
+function ActionBlock({ action, onSelect, disabled }) {
+  if (action.type === 'buttons' || action.type === 'confirm') {
+    return (
+      <div className="action-buttons">
+        {action.items.map((item, i) => (
+          <button
+            key={i}
+            className={`action-btn${item.style ? ` action-btn-${item.style}` : ''}`}
+            onClick={() => onSelect(item.value || item.label)}
+            disabled={disabled}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    )
+  }
+  if (action.type === 'rating') {
+    const max = action.max || 5
+    return (
+      <div className="action-buttons">
+        {Array.from({ length: max }, (_, i) => i + 1).map(n => (
+          <button key={n} className="action-btn action-btn-rating" onClick={() => onSelect(String(n))} disabled={disabled}>
+            {'★'.repeat(n)}{'☆'.repeat(max - n)}
+          </button>
+        ))}
+      </div>
+    )
+  }
+  return null
 }
 
 const css = `
@@ -99,6 +139,13 @@ const css = `
 .chat-bubble.assistant strong { font-weight: 700; color: var(--text); }
 .chat-bubble.assistant em { font-style: italic; color: var(--text-muted); }
 .chat-bubble.assistant hr { border: none; border-top: 1px solid var(--bg-border); margin: 10px 0; }
+.action-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.action-btn { background: var(--bg-card); border: 1px solid var(--accent); color: var(--accent); border-radius: 20px; padding: 5px 14px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
+.action-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.action-btn:disabled { opacity: 0.45; cursor: default; }
+.action-btn-danger { border-color: var(--err); color: var(--err); }
+.action-btn-danger:hover:not(:disabled) { background: var(--err); color: #fff; }
+.action-btn-rating { font-size: 11px; letter-spacing: -1px; }
 .chat-input-row { display: flex; gap: 8px; margin-top: 12px; }
 .chat-textarea { flex: 1; background: var(--bg); border: 1px solid var(--bg-border); border-radius: 6px; color: var(--text); padding: 10px 12px; font-size: 13px; resize: none; outline: none; min-height: 42px; font-family: inherit; }
 .chat-textarea:focus { border-color: var(--accent); }
@@ -932,6 +979,7 @@ function ChatTab({ sysInfo }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [usedActions, setUsedActions] = useState(new Set())
   const bottomRef = React.useRef(null)
 
   const models = sysInfo?.models || []
@@ -941,13 +989,13 @@ function ChatTab({ sysInfo }) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function send() {
-    const text = input.trim()
+  async function send(overrideText) {
+    const text = (overrideText ?? input).trim()
     if (!text || !selectedModel || streaming) return
     const userMsg = { role: 'user', content: text, id: Date.now() }
     const assistantId = Date.now() + 1
     setMessages(prev => [...prev, userMsg, { role: 'assistant', content: '', id: assistantId }])
-    setInput('')
+    if (!overrideText) setInput('')
     setStreaming(true)
     try {
       const r = await fetch('/api/chat', {
@@ -1010,24 +1058,35 @@ function ChatTab({ sysInfo }) {
             Start a conversation with {selectedModel}
           </div>
         )}
-        {messages.map(m => (
-          <div key={m.id} className={`chat-bubble-wrap ${m.role}`}>
-            {m.role === 'assistant' ? (
-              <div
-                className="chat-bubble assistant"
-                dangerouslySetInnerHTML={{
-                  __html: m.content
-                    ? renderMarkdown(m.content)
-                    : (streaming ? '▋' : '')
-                }}
-              />
-            ) : (
-              <div className="chat-bubble user">
-                {m.content}
+        {messages.map(m => {
+          if (m.role === 'assistant') {
+            const { text, actions } = parseActions(m.content)
+            const isLast = m.id === messages[messages.length - 1]?.id
+            return (
+              <div key={m.id} className="chat-bubble-wrap assistant">
+                <div className="chat-bubble assistant">
+                  <div dangerouslySetInnerHTML={{ __html: text ? renderMarkdown(text) : (streaming && isLast ? '▋' : '') }} />
+                  {!streaming && actions.map((action, i) => (
+                    <ActionBlock
+                      key={i}
+                      action={action}
+                      disabled={usedActions.has(`${m.id}-${i}`)}
+                      onSelect={val => {
+                        setUsedActions(prev => new Set([...prev, `${m.id}-${i}`]))
+                        send(val)
+                      }}
+                    />
+                  ))}
+                </div>
               </div>
-            )}
-          </div>
-        ))}
+            )
+          }
+          return (
+            <div key={m.id} className="chat-bubble-wrap user">
+              <div className="chat-bubble user">{m.content}</div>
+            </div>
+          )
+        })}
         <div ref={bottomRef} />
       </div>
       <div className="chat-input-row">
