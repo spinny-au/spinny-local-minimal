@@ -10,7 +10,7 @@ import { RelayClient, startHealthPush, pushHealthDirect, attemptReconnect } from
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
 import { startLocalServer } from "./local-server.js";
-import { startSubagentScheduler } from "./subagent-scheduler.js"
+import { startSubagentScheduler, listSubagents } from "./subagent-scheduler.js"
 import { startRelayInfer } from "./relay-infer.js";
 import { startTray } from "./tray.js";
 import { ensureEnvDefaults } from "./ensure-env.js";
@@ -131,10 +131,16 @@ try {
       }
     });
 
-    // Start autonomous sub-agent scheduler
-    const { monitorEmails, executeEmailAction, sendTelegramNotification, formatTelegramNotification } = await import('./email-vertical.js')
-    startSubagentScheduler({ monitorEmails, executeEmailAction, sendTelegramNotification, formatTelegramNotification })
+    // Start relay inference — always needed
     startRelayInfer()
+
+    // Start sub-agent scheduler only if active subagents exist — avoid loading
+    // the email vertical on nodes that haven't configured any verticals.
+    const { subagents } = listSubagents()
+    if (subagents.some(s => s.status === 'active')) {
+      const emailVertical = await import('./email-vertical.js')
+      startSubagentScheduler(emailVertical)
+    }
 
     // If state.json lost paired status but node is still registered in the DB,
     // restore it automatically without requiring a new pairing flow.
