@@ -421,10 +421,12 @@ step "Waiting for node to initialise"
 STATE_FILE="$STATE_DIR/state.json"
 LOG_FILE="$INSTALL_DIR/spinny-local.log"
 PAIRING_CODE=""; PAIRED=false
+STATE_ACCOUNT=""
 for i in $(seq 1 90); do
   sleep 1
   if [[ -f "$STATE_FILE" ]]; then
     IS_PAIRED=$(grep -oP '(?<="paired":)true' "$STATE_FILE" 2>/dev/null || true)
+    STATE_ACCOUNT=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('accountId') or '')" 2>/dev/null || true)
     [[ -n "$IS_PAIRED" ]] && PAIRED=true && break
   fi
   if [[ -f "$LOG_FILE" ]]; then
@@ -436,6 +438,14 @@ for i in $(seq 1 90); do
     [[ -n "$CODE" ]] && PAIRING_CODE="$CODE"
   fi
 done
+if $UPDATE && [[ "$PAIRED" == "false" && "$STATE_ACCOUNT" == *@* && -f "$INSTALL_DIR/src/main.js" ]]; then
+  step "Repairing existing pairing state"
+  (cd "$INSTALL_DIR" && "$NODE_BIN" --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js pairme2 "$STATE_ACCOUNT" >/tmp/spinny-update-pair-repair.log 2>&1 || true)
+  if [[ -f "$STATE_FILE" ]]; then
+    IS_PAIRED=$(grep -oP '(?<="paired":)true' "$STATE_FILE" 2>/dev/null || true)
+    [[ -n "$IS_PAIRED" ]] && PAIRED=true
+  fi
+fi
 [[ -z "$PAIRING_CODE" && "$PAIRED" == "false" ]] && PAIRING_CODE="run: launchctl log $SERVICE_LABEL"
 
 # ── 10. Tailscale ─────────────────────────────────────────────────────────────
@@ -531,6 +541,17 @@ echo -e "${DIM}${LINE}${RST}"
 if $PAIRED; then
   echo -e "  ${G}${B}✓ Already paired. Open spinny.au to start using Spinny.${RST}"
   echo -e "${DIM}${LINE}${RST}"
+  echo ""
+elif $UPDATE; then
+  echo -e "  ${G}${B}✓ Update complete.${RST}"
+  echo -e "${DIM}${LINE}${RST}"
+  echo ""
+  if [[ "$STATE_ACCOUNT" == *@* ]]; then
+    echo -e "  ${Y}${B}Existing account detected (${STATE_ACCOUNT}), but local paired state still needs repair.${RST}"
+    echo -e "  Run: ${B}spinny pairme2 ${STATE_ACCOUNT}${RST}"
+  else
+    echo -e "  ${Y}${B}Node is not paired. Run: spinny pairme2 your@email.com${RST}"
+  fi
   echo ""
 else
   echo -e "  Node is ready. ${B}Enter your spinny.au email to pair this node:${RST}"
