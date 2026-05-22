@@ -133,8 +133,16 @@ if $FRESH; then
   step "Fresh install — wiping previous installation"
   systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
   systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
+  rm -f "$SERVICE_FILE"
+  systemctl --user daemon-reload 2>/dev/null || true
   pkill -f "spinny-local-minimal" 2>/dev/null || true
   rm -rf "$INSTALL_DIR" "$STATE_DIR"
+  rm -f "$HOME/.local/bin/spinny"
+  if [[ "$EUID" -eq 0 ]]; then
+    rm -f /usr/local/bin/spinny
+  elif command -v sudo &>/dev/null; then
+    sudo rm -f /usr/local/bin/spinny 2>/dev/null || true
+  fi
   ok "Wiped"
 fi
 
@@ -251,6 +259,31 @@ gen_pairing_code() {
   echo "\$code"
 }
 
+print_version() {
+  local package_version="unknown"
+  local git_sha="unknown"
+  local git_branch="unknown"
+  local git_remote="unknown"
+  local resolved="not-on-path"
+  local node_version="unknown"
+  [[ -f "\$INSTALL_DIR/package.json" ]] && package_version=\$(node -e "console.log(require(process.argv[1]).version)" "\$INSTALL_DIR/package.json" 2>/dev/null || echo "unknown")
+  [[ -d "\$INSTALL_DIR/.git" ]] && git_sha=\$(git -C "\$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  [[ -d "\$INSTALL_DIR/.git" ]] && git_branch=\$(git -C "\$INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+  [[ -d "\$INSTALL_DIR/.git" ]] && git_remote=\$(git -C "\$INSTALL_DIR" remote get-url origin 2>/dev/null || echo "unknown")
+  resolved=\$(command -v spinny 2>/dev/null || echo "not-on-path")
+  node_version=\$(node --version 2>/dev/null || echo "unknown")
+  echo "Spinny local node"
+  echo "  package:     \$package_version"
+  echo "  git sha:     \$git_sha"
+  echo "  git branch:  \$git_branch"
+  echo "  git remote:  \$git_remote"
+  echo "  node:        \$node_version"
+  echo "  install dir: \$INSTALL_DIR"
+  echo "  state file:  \$(state_file)"
+  echo "  wrapper:     \$0"
+  echo "  resolved:    \$resolved"
+}
+
 request_pairme2() {
   if ! command -v curl >/dev/null 2>&1; then
     echo "curl is required to send a pairing request"
@@ -316,12 +349,7 @@ case "\$CLI_CMD" in
   start)
     systemctl --user start "\$SERVICE" && echo "Started." ;;
   version|--version|-v)
-    if [[ -f "\$INSTALL_DIR/package.json" ]]; then
-      node -e "console.log(require(process.argv[1]).version)" "\$INSTALL_DIR/package.json" 2>/dev/null \
-        || grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "\$INSTALL_DIR/package.json" | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
-    else
-      echo "unknown"
-    fi ;;
+    print_version ;;
   pairingcode|pairing-code|"pairing code")
     print_pairing_code ;;
   genpairingcode|gen-pairing-code|"gen pairing code"|"generate pairing code")
@@ -357,6 +385,11 @@ else
   install -m 755 "$CLI_WRAPPER" "$CLI_DIR/spinny"
 fi
 rm -f "$CLI_WRAPPER"
+
+# Remove old duplicate wrappers that can shadow the freshly installed one.
+if [[ "$CLI_DIR" == "/usr/local/bin" ]]; then
+  rm -f "$HOME/.local/bin/spinny" 2>/dev/null || true
+fi
 
 # Also ensure ~/.local/bin is on PATH for non-root fallback
 if [[ "$CLI_DIR" != "/usr/local/bin" ]]; then
@@ -517,11 +550,12 @@ RAM_GB=$(awk '/MemTotal/{printf "%.1f GB", $2/1048576}' /proc/meminfo 2>/dev/nul
 DISK_FREE=$(df -h "$INSTALL_DIR" 2>/dev/null | awk 'NR==2{print $4}' || echo '?')
 GPU_INFO=$(lspci 2>/dev/null | grep -i 'vga\|3d\|display' | head -1 | sed 's/.*: //' || echo 'No GPU info')
 NODE_VER=$(node -p "require('$INSTALL_DIR/package.json').version" 2>/dev/null || echo '?')
+GIT_SHA=$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')
 SVC_OK=$(systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null && echo true || echo false)
 STATUS_STR=$( $SVC_OK && echo "● Running" || echo "○ Not running — run: systemctl --user start ${SERVICE_NAME}")
 OLLAMA_STR=$($OLLAMA_RUNNING && echo "● Running  •  ${#OLLAMA_MODELS[@]} model(s)" || echo "○ Not running")
 BRAIN="${OLLAMA_MODELS[0]:-no model installed yet}"
-GIT_STR="✓ $(git --version)  (updates: spinny --update)"
+GIT_STR="OK $(git --version)  -  commit ${GIT_SHA}  (updates: spinny --update)"
 
 PORT_OK=false
 curl -sf --max-time 3 "http://localhost:${NODE_PORT}/health" >/dev/null 2>&1 && PORT_OK=true
@@ -547,7 +581,7 @@ echo -e "${Y}${B}  ↓  ↓  ↓  ↓  ↓  ↓  ↓   IMPORTANT — COPY & STOR
 echo -e "${DIM}${LINE}${RST}"
 for i in "${!LOGO[@]}"; do print_rainbow "${LOGO[$i]}" $i; done
 echo -e "${DIM}${LINE}${RST}"
-echo -e "  🚀  ${B}SPINNY LOCAL NODE  v${NODE_VER}  SUCCESSFULLY INSTALLED${RST}  🚀"
+echo -e "  ${B}SPINNY LOCAL NODE  v${NODE_VER} (${GIT_SHA})  SUCCESSFULLY INSTALLED${RST}"
 echo -e "${DIM}--------------------------------------------------------------------${RST}"
 echo ""
 printf "  %-18s: %s\n"                                   "Node name" "$NODE_NAME_ENV"
