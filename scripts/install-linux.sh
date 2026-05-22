@@ -318,6 +318,9 @@ request_pairme2() {
   fi
   IFS=\$'\t' read -r request_id target_email node_id expires_at <<< "\$parsed"
   if [[ "\$request_id" == "ALREADY" ]]; then
+    if [[ -f "\$INSTALL_DIR/src/main.js" ]]; then
+      (cd "\$INSTALL_DIR" && node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js pairme2 "\$target_email" >/tmp/spinny-pairme2-repair.log 2>&1 || true)
+    fi
     echo "Node is already paired to \$target_email"
     echo "Node: \$node_id"
     return 0

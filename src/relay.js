@@ -4,7 +4,7 @@ import { loadState, saveState } from "./state.js";
 import { handleTask } from "./tasks.js";
 import { assertFreshIssuedAt, nodeHello } from "./protocol.js";
 import { getSystemInfo } from "./system-info.js";
-import { applyPendingPairingCodeClaim, applyPendingPairingRequestApproval } from "./pairing.js";
+import { applyPendingPairingCodeClaim, applyPendingPairingRequestApproval, requestPairing } from "./pairing.js";
 
 function derivedRelayUrl(state) {
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
@@ -89,6 +89,17 @@ export async function pushHealthDirect() {
       if (pending.applied) state = pending.state
     } catch (err) {
       console.error(`[relay-pair] pending code claim check failed: ${err.message}`)
+    }
+  }
+  if (!state.paired && state.accountId && String(state.accountId).includes("@")) {
+    try {
+      const repaired = await requestPairing({
+        targetEmail: state.accountId,
+        controlUrl: state.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au',
+      })
+      if (repaired.alreadyPaired) state = loadState()
+    } catch (err) {
+      console.error(`[relay-pair] already-paired repair failed: ${err.message}`)
     }
   }
   if (!state.paired || !state.nodeId) return { ok: false, skipped: true, reason: 'node is not paired' }
