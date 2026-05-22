@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { loadState } from './state.js'
 import { OllamaClient } from './ollama.js'
 import { attemptReconnect } from './relay.js'
+import { captureChildStderr, logEvent } from './log-streamer.js'
 
 const POLL_INTERVAL = 1000
 const TOKEN_BATCH_CHARS = 120
@@ -62,7 +63,10 @@ async function claimTask() {
       })
       if (res.ok) {
         const data = await res.json()
-        if (data.task) console.log(`[relay-infer] claimed task ${data.task.taskId}`)
+        if (data.task) {
+          console.log(`[relay-infer] claimed task ${data.task.taskId}`)
+          logEvent('info', 'task', `chunk:${data.task.taskId}`, `claimed ${data.task.type || 'task'}`)
+        }
         return data.task || null
       }
       const body = await res.json().catch(() => ({}))
@@ -95,7 +99,7 @@ async function postChunk(taskId, chunk) {
 }
 
 async function runChatStream(task) {
-  const { model, messages, system_prompt } = task.params || {}
+  const { model, messages, system_prompt, params } = task.params || {}
   if (!model) {
     await postChunk(task.taskId, { error: 'No model specified', done: true, seq: 0 })
     return
@@ -106,12 +110,30 @@ async function runChatStream(task) {
   if (system_prompt) chatMessages.push({ role: 'system', content: system_prompt })
   if (Array.isArray(messages)) chatMessages.push(...messages)
 
+  // Build the Ollama request. Caller-supplied params (temperature, top_p, etc.)
+  // are passed through as `options`. `think` is disabled by default so qwen3/
+  // r1-style thinking tokens don't pollute the visible response — caller can
+  // explicitly opt in with params.think = true.
+  const ollamaBody = {
+    model,
+    messages: chatMessages,
+    stream: true,
+    think: params?.think === true ? true : false,
+  }
+  if (params && typeof params === 'object') {
+    const opts = {}
+    for (const k of ['temperature', 'top_p', 'top_k', 'repeat_penalty', 'num_predict', 'num_ctx', 'seed', 'stop']) {
+      if (params[k] !== undefined && params[k] !== null) opts[k] = params[k]
+    }
+    if (Object.keys(opts).length) ollamaBody.options = opts
+  }
+
   let response
   try {
     response = await fetch(`${ollamaUrl}/api/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model, messages: chatMessages, stream: true }),
+      body: JSON.stringify(ollamaBody),
     })
   } catch (err) {
     await postChunk(task.taskId, { error: `Ollama connection failed: ${err.message}`, done: true, seq: 0 })
@@ -200,7 +222,7 @@ async function runOllamaInstall(task) {
   let seq = 0
   try {
     await new Promise((resolve, reject) => {
-      const proc = spawn('sh', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], { stdio: ['ignore', 'pipe', 'pipe'] })
+      const proc = captureChildStderr(spawn('sh', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], { stdio: ['ignore', 'pipe', 'pipe'] }), 'ollama.install')
       let buf = ''
       const flush = (data) => {
         buf += data.toString()
