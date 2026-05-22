@@ -240,6 +240,32 @@ export class RelayClient extends EventEmitter {
       const detail = `code=${event?.code ?? "unknown"}${reason ? ` reason=${reason}` : ""}`;
       this.lastError = `Relay closed: ${detail}`;
       logRelay(`socket close ${detail}`);
+      if (event?.code === 1008) {
+        // Unauthorized — relay rejected our session token (node was revoked/purged).
+        // Clear paired state so the node goes back to pairing mode.
+        this.lastError = "Relay rejected session — node was revoked. Clearing paired state.";
+        console.warn(`[relay] ${this.lastError}`);
+        try {
+          const s = loadState();
+          saveState({
+            ...s,
+            paired: false,
+            relaySessionToken: null,
+            relaySessionExpiresAt: null,
+            accountId: null,
+            pairingCode: null,
+            pairingCodeIssuedAt: null,
+            pairingRequestId: null,
+            pairingRequestEmail: null,
+          });
+          console.log('[relay] paired state cleared — restart required to re-pair');
+        } catch (err) {
+          console.error('[relay] failed to clear state:', err.message);
+        }
+        this.reconnect = false; // stop reconnecting — need user to re-pair
+        this.emit("disconnected");
+        return;
+      }
       if (this.openedAt && Date.now() - this.openedAt < 3000) {
         this.lastError = "Relay closed immediately after hello - session token may be expired. Re-pair may be required.";
         console.warn(`[relay] ${this.lastError}`);
