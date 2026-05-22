@@ -43,6 +43,19 @@ try {
       accountId: state.accountId
     }, null, 2));
 
+  } else if (command === "pairstatus") {
+    const state = loadState()
+    if (state.paired && state.accountId) {
+      console.log(`paired — account: ${state.accountId}`)
+      console.log(`node:    ${state.nodeId}`)
+      console.log(`name:    ${state.nodeName || '(none)'}`)
+      console.log(`since:   ${state.pairedAt || 'unknown'}`)
+    } else {
+      console.log('not paired')
+      console.log(`node:    ${state.nodeId || '(none)'}`)
+      process.exitCode = 1
+    }
+
   } else if (command === "reconnect") {
     const result = await attemptReconnect({ controlUrl: process.env.SPINNY_CONTROL_URL || loadState().controlUrl })
     if (result.reconnected) {

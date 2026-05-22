@@ -369,19 +369,22 @@ case "\$CLI_CMD" in
     ) ;;
   reconnect)
     (cd "\$INSTALL_DIR" && node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js reconnect) ;;
+  pairstatus|pair-status|"pair status")
+    (cd "\$INSTALL_DIR" && node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js pairstatus) ;;
   help|--help|-h|*)
     echo "Usage: spinny <command>"
-    echo "  spinny --update   Pull latest code and restart"
-    echo "  spinny --fresh    Wipe state and reinstall (re-pairs)"
-    echo "  spinny version    Show installed version"
+    echo "  spinny --update        Pull latest code and restart"
+    echo "  spinny --fresh         Wipe state and reinstall (re-pairs)"
+    echo "  spinny version         Show installed version"
+    echo "  spinny pairstatus      Show pairing status and paired account"
     echo "  spinny pairing code    Show current pairing code"
     echo "  spinny pairme2 email   Request pairing from spinny.au"
     echo "  spinny genpairingcode  Generate a fresh pairing code"
     echo "  spinny sendhealth      Push current health to spinny.au"
     echo "  spinny reconnect       Restore paired state from DB (no re-pairing needed)"
-    echo "  spinny status     Show service status"
-    echo "  spinny logs       Tail the node log"
-    echo "  spinny restart    Restart the service"
+    echo "  spinny status          Show service status"
+    echo "  spinny logs            Tail the node log"
+    echo "  spinny restart         Restart the service"
     echo "  spinny start / stop" ;;
 esac
 SPINNY_CLI
