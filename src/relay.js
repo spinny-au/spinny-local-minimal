@@ -9,9 +9,24 @@ import { applyPendingPairingCodeClaim, applyPendingPairingRequestApproval, reque
 let _lastTokenRenewalAttempt = 0
 let _renewalInProgress = false
 
+const CANONICAL_RELAY_URL = 'wss://spinny-local-relay.spinny-au.workers.dev/node'
+const KNOWN_BAD_RELAY_URLS = new Set(['wss://relay.spinny.au/node'])
+
+// Self-heal nodes whose state.relayUrl got rewritten to a dead endpoint by a
+// previous bad deploy. Runs once on module load.
+;(() => {
+  try {
+    const s = loadState()
+    if (s.relayUrl && KNOWN_BAD_RELAY_URLS.has(s.relayUrl)) {
+      saveState({ ...s, relayUrl: CANONICAL_RELAY_URL })
+      console.log(`[relay] auto-corrected stale relayUrl → ${CANONICAL_RELAY_URL}`)
+    }
+  } catch {}
+})()
+
 function derivedRelayUrl(state) {
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
-  return 'wss://relay.spinny.au/node'
+  return CANONICAL_RELAY_URL
 }
 
 function relayUrlForState(url, state) {
