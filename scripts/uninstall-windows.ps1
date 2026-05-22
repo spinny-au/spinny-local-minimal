@@ -77,7 +77,8 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -EA SilentlyContin
 if ($spinnyNodePids.Count -gt 0) { ok "Killed Spinny process(es): $($spinnyNodePids -join ', ')" }
 Start-Sleep 1
 
-# 3. Remove app directory
+# 3. Remove app directory (cd out first so we don't hold a lock on it)
+Set-Location $env:USERPROFILE
 step "Removing app files"
 if (Test-Path $INSTALL_DIR) {
     # Use cmd rmdir to handle long paths and locked files better

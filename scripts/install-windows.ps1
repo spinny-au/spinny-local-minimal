@@ -54,6 +54,9 @@ try {
 Write-Step "Installing Spinny"
 $RepoUrl = "https://github.com/spinny-au/spinny-local-minimal.git"
 
+# cd out so we never hold a lock on the install dir
+Set-Location $env:USERPROFILE
+
 if (Test-Path "$InstallDir\.git") {
   Write-Host "  Updating existing install..." -ForegroundColor DarkGray
   git -C $InstallDir pull --quiet
