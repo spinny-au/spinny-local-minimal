@@ -559,6 +559,9 @@ else
     printf "  ${Y}Waiting for approval on spinny.au${RST}"
     for i in $(seq 1 180); do
       sleep 1
+      if ! kill -0 "$PAIRME2_PID" 2>/dev/null; then
+        break
+      fi
       if [[ -f "$STATE_FILE" ]]; then
         IS_PAIRED=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print('yes' if d.get('paired') else '')" 2>/dev/null || true)
         [[ "$IS_PAIRED" == "yes" ]] && PAIR_SUCCESS=true && break
@@ -587,6 +590,11 @@ else
       echo -e "  ${Y}${B}⚠  Approval pending — open spinny.au to approve${RST}"
       echo -e "${DIM}${LINE}${RST}"
       echo ""
+      if [[ -s /tmp/spinny-pairme2.log ]] && grep -qiE "Pairing request failed|Error|failed" /tmp/spinny-pairme2.log; then
+        echo -e "  ${R}${B}Pairing request failed before it reached spinny.au:${RST}"
+        sed -n '1,12p' /tmp/spinny-pairme2.log
+        echo ""
+      fi
       echo -e "  The request was sent to ${B}${PAIR_EMAIL}${RST}."
       echo -e "  Open ${B}spinny.au${RST}, go to Settings → Local Node and approve it."
       echo ""
