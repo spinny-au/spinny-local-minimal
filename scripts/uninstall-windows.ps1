@@ -57,16 +57,14 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" -EA SilentlyContinue |
     Where-Object { $_.CommandLine -like "*SpinnyLocalMinimal*" -or $_.CommandLine -like "*spinny-local*" -or $_.CommandLine -like "*src\main.js*" } |
     ForEach-Object { $spinnyNodePids += $_.ProcessId; Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
 
-# By TCP port 47821 (catches any node that owns the port regardless of path)
-$portPids = netstat -ano 2>$null | Select-String ':47821\s' | ForEach-Object {
+# By TCP port 47821 — kill ALL processes involved (listener and pollers)
+$portPids = netstat -ano 2>$null | Select-String ':47821' | ForEach-Object {
     ($_ -split '\s+' | Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1)
-} | Where-Object { $_ }
+} | Where-Object { $_ } | Sort-Object -Unique
 foreach ($pid in $portPids) {
-    $proc = Get-Process -Id $pid -EA SilentlyContinue
-    if ($proc -and $proc.Name -eq 'node') {
-        $spinnyNodePids += $pid
-        Stop-Process -Id $pid -Force -EA SilentlyContinue
-    }
+    if ($pid -eq 0) { continue }
+    $spinnyNodePids += $pid
+    Stop-Process -Id $pid -Force -EA SilentlyContinue
 }
 
 # Kill tray helper
