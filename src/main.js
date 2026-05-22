@@ -13,6 +13,7 @@ import { startLocalServer } from "./local-server.js";
 import { startSubagentScheduler } from "./subagent-scheduler.js"
 import { startRelayInfer } from "./relay-infer.js";
 import { startTray } from "./tray.js";
+import { ensureEnvDefaults } from "./ensure-env.js";
 
 const command = process.argv[2] || "start";
 
@@ -103,6 +104,7 @@ try {
   } else if (command === "start") {
     ensureNodeIdentity();
     ensureVaultKey();
+    ensureEnvDefaults();
     let state = loadState();
 
     let relayConnected = false;
@@ -123,6 +125,7 @@ try {
       onPaired: (result) => {
         console.log(`\nPaired! Node ID: ${result.nodeId}`);
         console.log("Starting relay connection...\n");
+        ensureEnvDefaults()
         pairingResolver?.(result);
         stopRotation?.();
       }
@@ -235,6 +238,7 @@ try {
                 clearInterval(pollTimer)
                 if (isInteractive) process.stdout.write('\n')
                 console.log(`\n  Approved! Paired as ${newState.accountId}`)
+                ensureEnvDefaults()
                 pairingResolver?.(newState)
               } catch (err) {
                 pairingClaimSeen = false
@@ -272,6 +276,7 @@ try {
               clearInterval(pollTimer)
               if (isInteractive) process.stdout.write('\n')
               console.log(`\n  Paired as ${body.accountEmail}`)
+              ensureEnvDefaults()
               pairingResolver?.(newState)
             } catch (err) {
               pairingClaimSeen = false
