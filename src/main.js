@@ -56,6 +56,10 @@ try {
     const email = process.argv[3] || readFlag("--email");
     const result = await requestPairing({ targetEmail: email });
     console.log(JSON.stringify(result, null, 2));
+    if (result.alreadyPaired) {
+      console.log(`\nNode is already paired to ${result.targetEmail}.`);
+      process.exit(0);
+    }
     // Poll until approved (up to 3 min) so user sees confirmation immediately.
     // The running daemon will also detect approval via its own poll loop.
     const deadline = Date.now() + 3 * 60_000

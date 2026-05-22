@@ -275,10 +275,10 @@ request_pairme2() {
   local body
   body=\$(curl "\${args[@]}" --data "\$payload" "http://localhost:47821/pairing/request" 2>/dev/null || true)
   local parsed
-  parsed=\$(printf '%s' "\$body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d); if(j.requestId) console.log([j.requestId,j.targetEmail||'',j.nodeId||'',j.expiresAt||''].join('\\t')); else if(j.error) console.error(j.error)}catch{}})" 2>/tmp/spinny-pairme2.err)
+  parsed=\$(printf '%s' "\$body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d); if(j.alreadyPaired) console.log(['ALREADY',j.targetEmail||'',j.nodeId||''].join('\\t')); else if(j.requestId) console.log([j.requestId,j.targetEmail||'',j.nodeId||'',j.expiresAt||''].join('\\t')); else if(j.error) console.error(j.error)}catch{}})" 2>/tmp/spinny-pairme2.err)
   if [[ -z "\$parsed" && -f "\$INSTALL_DIR/src/main.js" ]]; then
     body=\$(cd "\$INSTALL_DIR" && node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js pairme2 "\$email" 2>/tmp/spinny-pairme2.err || true)
-    parsed=\$(printf '%s' "\$body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d); if(j.requestId) console.log([j.requestId,j.targetEmail||'',j.nodeId||'',j.expiresAt||''].join('\\t'))}catch{}})" 2>/dev/null)
+    parsed=\$(printf '%s' "\$body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d); if(j.alreadyPaired) console.log(['ALREADY',j.targetEmail||'',j.nodeId||''].join('\\t')); else if(j.requestId) console.log([j.requestId,j.targetEmail||'',j.nodeId||'',j.expiresAt||''].join('\\t'))}catch{}})" 2>/dev/null)
   fi
   if [[ -z "\$parsed" ]]; then
     echo "Could not send pairing request. Is the node running?"
@@ -287,6 +287,11 @@ request_pairme2() {
     return 1
   fi
   IFS=\$'\t' read -r request_id target_email node_id expires_at <<< "\$parsed"
+  if [[ "\$request_id" == "ALREADY" ]]; then
+    echo "Node is already paired to \$target_email"
+    echo "Node: \$node_id"
+    return 0
+  fi
   echo "Pairing request sent to \$target_email"
   echo "Request: \$request_id"
   echo "Node: \$node_id"

@@ -127,6 +127,23 @@ export async function requestPairing({ targetEmail, controlUrl = process.env.SPI
     throw new Error(`Pairing request failed: ${response.status} ${body.error || JSON.stringify(body)}`);
   }
 
+  if (body.alreadyPaired) {
+    saveState({
+      ...state,
+      paired: state.paired || false,
+      accountId: state.accountId || email,
+      nodePublicKey: identity.publicKeyDer,
+      controlUrl: base,
+    });
+    return {
+      ok: true,
+      alreadyPaired: true,
+      targetEmail: email,
+      nodeId: state.nodeId,
+      message: body.message || "node already paired",
+    };
+  }
+
   saveState({
     ...state,
     pairingRequestId: requestId,
