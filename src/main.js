@@ -43,6 +43,16 @@ try {
       accountId: state.accountId
     }, null, 2));
 
+  } else if (command === "reconnect") {
+    const result = await attemptReconnect({ controlUrl: process.env.SPINNY_CONTROL_URL || loadState().controlUrl })
+    if (result.reconnected) {
+      const s = loadState()
+      console.log(JSON.stringify({ reconnected: true, paired: true, accountId: s.accountId }, null, 2))
+    } else {
+      console.log(JSON.stringify({ reconnected: false, paired: false }, null, 2))
+      process.exitCode = 1
+    }
+
   } else if (command === "sendhealth") {
     const result = await pushHealthDirect()
     if (result?.skipped) {

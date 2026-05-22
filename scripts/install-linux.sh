@@ -465,9 +465,9 @@ for i in $(seq 1 90); do
     [[ -n "$CODE" ]] && PAIRING_CODE="$CODE"
   fi
 done
-if $UPDATE && [[ "$PAIRED" == "false" && "$STATE_ACCOUNT" == *@* && -f "$INSTALL_DIR/src/main.js" ]]; then
-  step "Repairing existing pairing state"
-  (cd "$INSTALL_DIR" && "$NODE_BIN" --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js pairme2 "$STATE_ACCOUNT" >/tmp/spinny-update-pair-repair.log 2>&1 || true)
+if $UPDATE && [[ "$PAIRED" == "false" && -f "$INSTALL_DIR/src/main.js" ]]; then
+  step "Attempting reconnect from DB"
+  (cd "$INSTALL_DIR" && "$NODE_BIN" --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js reconnect >/tmp/spinny-reconnect.log 2>&1 || true)
   if [[ -f "$STATE_FILE" ]]; then
     IS_PAIRED=$(grep -oP '(?<="paired":)true' "$STATE_FILE" 2>/dev/null || true)
     [[ -n "$IS_PAIRED" ]] && PAIRED=true
@@ -636,8 +636,7 @@ elif $UPDATE; then
   echo -e "${DIM}${LINE}${RST}"
   echo ""
   if [[ "$STATE_ACCOUNT" == *@* ]]; then
-    echo -e "  ${Y}${B}Existing account detected (${STATE_ACCOUNT}), but local paired state still needs repair.${RST}"
-    echo -e "  Run: ${B}spinny pairme2 ${STATE_ACCOUNT}${RST}"
+    echo -e "  ${Y}${B}Node is not paired. Run: spinny pairme2 ${STATE_ACCOUNT}${RST}"
   else
     echo -e "  ${Y}${B}Node is not paired. Run: spinny pairme2 your@email.com${RST}"
   fi
