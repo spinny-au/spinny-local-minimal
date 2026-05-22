@@ -132,13 +132,12 @@ try {
             body: JSON.stringify({ pairingCode: code, nodeId: s.nodeId, nodePublicKey: identity.publicKeyDer }),
             signal: AbortSignal.timeout(8000),
           })
-          console.log(`[relay-pair] advertise ${code} -> ${r.status}${reason ? ` (${reason})` : ''}`)
+          if (!process.env.SPINNY_SILENT) console.log(`[relay-pair] advertise ${code} -> ${r.status}${reason ? ` (${reason})` : ''}`)
         } catch (err) {
           console.error('[relay-pair] advertise failed:', err.message)
         }
       }
 
-      // Reuse existing code if still fresh, otherwise generate new one
       await rotateCode()
       state = loadState()
       const rotateTimer = setInterval(rotateCode, ROTATE_MS)
@@ -147,105 +146,77 @@ try {
         if (!needsMorePairings(s)) clearInterval(rotateTimer)
       }
 
-      const code = state.pairingCode;
-      const pairingUrl = `${controlUrl}/?localcode=${code}`;
-
-      // Detect Tailscale IP for remote-node users
-      let tailscaleIp = null;
-      try {
-        const { execSync: _exec } = await import('node:child_process');
-        const ts = _exec('tailscale ip --4', { timeout: 3000, stdio: 'pipe' }).toString().trim();
-        if (/^\d+\.\d+\.\d+\.\d+$/.test(ts)) tailscaleIp = ts;
-      } catch {}
-
-      const nodePort = 47821;
-      const nodeAddr = tailscaleIp ? `${tailscaleIp}:${nodePort}` : `localhost:${nodePort}`;
-
-      console.log("\n╔══════════════════════════════════════════════════╗");
-      console.log(`║  Pairing code:  ${code.padEnd(33)}║`);
-      console.log(`║  Node address:  ${nodeAddr.padEnd(33)}║`);
-      console.log("╠══════════════════════════════════════════════════╣");
-      console.log("║  Pair at spinny.au — no node address needed      ║");
-      console.log("║  (relay pairing — works from any browser)        ║");
-      console.log("╚══════════════════════════════════════════════════╝\n");
-      qrcode.generate(pairingUrl, { small: true });
-      console.log(`QR URL: ${pairingUrl}\n`);
-      console.log("Waiting for pairing...\n");
-
       startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
 
+      // ── Email prompt (interactive terminals only) ──────────────────────────
+      const isInteractive = process.stdin.isTTY
+      let emailForPairing = process.env.SPINNY_EMAIL || ''
 
-      // Poll spinny.au for claim — when someone enters the code on spinny.au,
-      // complete pairing via signed pairNodeDirect (no direct network access needed)
+      if (isInteractive && !emailForPairing && !loadState().pairingRequestId) {
+        const { createInterface } = await import('node:readline')
+        const rl = createInterface({ input: process.stdin, output: process.stdout })
+        emailForPairing = await new Promise(resolve => {
+          process.stdout.write('\n  Enter your spinny.au email to pair this node: ')
+          rl.question('', ans => { rl.close(); resolve(ans.trim().toLowerCase()) })
+        })
+      }
+
+      if (emailForPairing && emailForPairing.includes('@') && !loadState().pairingRequestId) {
+        console.log(`\n  Sending pairing request to ${emailForPairing}...`)
+        try {
+          await requestPairing({ targetEmail: emailForPairing })
+          console.log(`  Request sent. Waiting for you to approve on spinny.au`)
+          if (isInteractive) process.stdout.write('  ')
+        } catch (err) {
+          console.error('  Pairing request failed:', err.message)
+        }
+      } else if (isInteractive && !loadState().pairingRequestId) {
+        // No email — show code as fallback
+        const code = loadState().pairingCode
+        console.log(`\n  No email entered. Backup pairing code: ${code}`)
+        console.log(`  Go to spinny.au and enter this code to pair.\n`)
+      }
+
+      // ── Poll loop — detects both pairme2 approval and code claim ──────────
       let pollCount = 0
       const pollTimer = setInterval(async () => {
         pollCount++
         try {
           const currentState = loadState()
-          const {
-            pairingCode: currentCode,
-            nodeId: currentNodeId,
-            pairingRequestId,
-            pairingRequestEmail,
-          } = currentState
+          const { pairingCode: currentCode, nodeId: currentNodeId, pairingRequestId, pairingRequestEmail } = currentState
           const logPoll = pollCount === 1 || pollCount % 12 === 0
+
           if (pairingRequestId) {
-            if (logPoll) {
-              console.log(`[pairme2] poll #${pollCount} request=${String(pairingRequestId).slice(0, 12)}... email=${pairingRequestEmail || 'unknown'}`)
-            }
-            const requestStatus = await getPairingRequestStatus({
-              requestId: pairingRequestId,
-              nodeId: currentNodeId,
-              controlUrl,
-            })
-            if (logPoll || requestStatus.approved || requestStatus.rejected || requestStatus.expired) {
-              console.log(`[pairme2] poll #${pollCount} ->`, JSON.stringify(requestStatus))
-            }
+            const requestStatus = await getPairingRequestStatus({ requestId: pairingRequestId, nodeId: currentNodeId, controlUrl })
             if (requestStatus.approved && requestStatus.relaySessionToken) {
               pairingClaimSeen = true
               try {
                 const newState = applyPairingRequestApproval(requestStatus, controlUrl)
                 clearInterval(rotateTimer)
                 clearInterval(pollTimer)
-                console.log(`[pairme2] APPROVED by ${newState.accountId} - paired! nodeId=${newState.nodeId}`)
+                if (isInteractive) process.stdout.write('\n')
+                console.log(`\n  Approved! Paired as ${newState.accountId}`)
                 pairingResolver?.(newState)
               } catch (err) {
                 pairingClaimSeen = false
-                console.error(`[pairme2] applyPairingRequestApproval failed (will retry): ${err.message}`)
+                console.error(`[pairme2] apply failed (will retry): ${err.message}`)
               }
               return
             }
             if (requestStatus.rejected || requestStatus.expired) {
-              saveState({
-                ...loadState(),
-                pairingRequestId: null,
-                pairingRequestEmail: null,
-                pairingRequestIssuedAt: null,
-                pairingRequestExpiresAt: null,
-              })
-              console.log(`[pairme2] request ${requestStatus.rejected ? 'rejected' : 'expired'} - continuing code pairing`)
+              saveState({ ...loadState(), pairingRequestId: null, pairingRequestEmail: null, pairingRequestIssuedAt: null, pairingRequestExpiresAt: null })
+              console.log(`  Pairing request ${requestStatus.rejected ? 'rejected' : 'expired'}`)
             }
-          }
-          if (!currentCode) { console.log('[relay-pair] poll: no code in state'); return }
-          if (logPoll) console.log(`[relay-pair] poll #${pollCount} code=${currentCode} nodeId=${currentNodeId.slice(0,8)}…`)
-          const r = await fetch(
-            `${controlUrl}/api/spinny/pairing/status?code=${currentCode}&nodeId=${currentNodeId}`,
-            { signal: AbortSignal.timeout(8000) }
-          );
-          const body = await r.json();
-          if (logPoll || !r.ok || body.claimed || body.expired) {
-            console.log(`[relay-pair] poll #${pollCount} → HTTP ${r.status}`, JSON.stringify(body))
-          }
-          if (!r.ok) { console.error('[relay-pair] poll error:', r.status, body); return; }
-          if (body.expired) {
-            console.log('[relay-pair] code expired on cloud — forcing a fresh pairing code now')
-            await rotateCode({ force: true, reason: 'cloud expired' })
+            if (isInteractive && !pairingClaimSeen) process.stdout.write('.')
             return
           }
-          if (body.waiting) {
-            if (logPoll) console.log('[relay-pair] waiting for user to enter code')
-            return
-          }
+
+          if (!currentCode) return
+          const r = await fetch(`${controlUrl}/api/spinny/pairing/status?code=${currentCode}&nodeId=${currentNodeId}`, { signal: AbortSignal.timeout(8000) })
+          const body = await r.json()
+          if (!r.ok) return
+          if (body.expired) { await rotateCode({ force: true, reason: 'cloud expired' }); return }
+          if (body.waiting) { if (isInteractive && !pairingClaimSeen) process.stdout.write('.'); return }
           if (body.claimed && body.relaySessionToken) {
             pairingClaimSeen = true
             try {
@@ -260,36 +231,26 @@ try {
               })
               clearInterval(rotateTimer)
               clearInterval(pollTimer)
-              console.log(`[relay-pair] CLAIMED by ${body.accountEmail} — relay session received, saving state…`);
-              console.log(`[relay-pair] SUCCESS — paired! nodeId=${newState.nodeId} accountId=${newState.accountId}`);
-              pairingResolver?.(newState);
+              if (isInteractive) process.stdout.write('\n')
+              console.log(`\n  Paired as ${body.accountEmail}`)
+              pairingResolver?.(newState)
             } catch (err) {
               pairingClaimSeen = false
               console.error(`[relay-pair] saveState failed (will retry): ${err.message}`)
             }
-          } else if (body.claimed && body.accountEmail) {
-            // Fallback: claimed but no relay token yet (node_public_key not in advertisement)
-            console.log(`[relay-pair] CLAIMED by ${body.accountEmail} but no relaySessionToken yet — waiting…`)
-          } else {
-            console.log('[relay-pair] unexpected poll response:', JSON.stringify(body))
           }
         } catch (err) {
-          console.error('[relay-pair] poll EXCEPTION:', err.message);
+          // silent — poll errors are transient
         }
-      }, 5000);
+      }, 5000)
 
-      // Safety net: if pairingResolver was never called but state got updated
-      // (e.g. by a CLI pairme2 that applied approval), resolve the promise anyway.
-      const pairingPromise = new Promise(resolve => { pairingResolver = resolve });
+      const pairingPromise = new Promise(resolve => { pairingResolver = resolve })
       const safetyTimer = setInterval(() => {
-        if (loadState().paired) {
-          clearInterval(safetyTimer)
-          pairingResolver?.(loadState())
-        }
+        if (loadState().paired) { clearInterval(safetyTimer); pairingResolver?.(loadState()) }
       }, 10_000)
-      await pairingPromise;
+      await pairingPromise
       clearInterval(safetyTimer)
-      clearInterval(pollTimer);
+      clearInterval(pollTimer)
     } else {
       // Already paired — start tray immediately
       startTray({ getStatus: () => ({ relayConnected }) }).catch(() => {});
