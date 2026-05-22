@@ -191,3 +191,29 @@ export function applyPairingRequestApproval(body, controlUrl = process.env.SPINN
       : [{ email: accountEmail, role: existingUsers.length ? "member" : "owner", addedAt: new Date().toISOString() }, ...existingUsers],
   });
 }
+
+export async function applyPendingPairingRequestApproval({
+  controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au",
+} = {}) {
+  const state = loadState();
+  if (state.paired) return { applied: false, reason: "already paired", state };
+  if (!state.pairingRequestId || !state.nodeId) {
+    return { applied: false, reason: "no pending pairing request", state };
+  }
+
+  const status = await getPairingRequestStatus({
+    requestId: state.pairingRequestId,
+    nodeId: state.nodeId,
+    controlUrl: state.controlUrl || controlUrl,
+  });
+  if (status.approved && status.relaySessionToken) {
+    const next = applyPairingRequestApproval(status, state.controlUrl || controlUrl);
+    return { applied: true, reason: "approved", state: next };
+  }
+  return {
+    applied: false,
+    reason: status.rejected ? "rejected" : status.expired ? "expired" : "waiting",
+    status,
+    state,
+  };
+}

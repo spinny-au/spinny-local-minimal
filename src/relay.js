@@ -4,6 +4,7 @@ import { loadState, saveState } from "./state.js";
 import { handleTask } from "./tasks.js";
 import { assertFreshIssuedAt, nodeHello } from "./protocol.js";
 import { getSystemInfo } from "./system-info.js";
+import { applyPendingPairingRequestApproval } from "./pairing.js";
 
 function derivedRelayUrl(state) {
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
@@ -73,7 +74,15 @@ function skipLegacyVpsRelayUrl(url, target = 'Cloudflare relay') {
 }
 
 export async function pushHealthDirect() {
-  const state = loadState()
+  let state = loadState()
+  if (!state.paired && state.pairingRequestId) {
+    try {
+      const pending = await applyPendingPairingRequestApproval({ controlUrl: state.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au' })
+      if (pending.applied) state = pending.state
+    } catch (err) {
+      console.error(`[pairme2] pending approval check failed: ${err.message}`)
+    }
+  }
   if (!state.paired || !state.nodeId) return { ok: false, skipped: true, reason: 'node is not paired' }
   const base = (state.controlUrl || 'https://spinny.au').replace(/\/$/, '')
   const headers = { 'content-type': 'application/json' }
