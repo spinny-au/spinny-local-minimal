@@ -123,17 +123,25 @@ export async function pushHealthDirect() {
       if (r.reconnected) state = loadState()
     } catch {}
   }
-  // Proactive token renewal: if the relay session token expires within 30 minutes,
-  // force a reconnect using the node's key pair so health pushes and chunk POSTs keep working.
-  if (state.paired && state.nodeId && state.relaySessionExpiresAt) {
-    const expiresAt = new Date(state.relaySessionExpiresAt).getTime()
+  // Proactive token renewal: renew if the relay session token expires within
+  // 30 minutes, OR if expiresAt is unknown (legacy paired nodes without the
+  // timestamp), OR if the token itself is missing. The node's Ed25519 key pair
+  // is the source of truth — the relay session token is just a cache.
+  if (state.paired && state.nodeId) {
+    const expiresAt = state.relaySessionExpiresAt ? new Date(state.relaySessionExpiresAt).getTime() : 0
     const now = Date.now()
-    if (expiresAt < now + 30 * 60 * 1000 && now - _lastTokenRenewalAttempt > 5 * 60 * 1000) {
+    const tokenNearExpiry = expiresAt < now + 30 * 60 * 1000
+    const tokenMissing = !state.relaySessionToken
+    if ((tokenNearExpiry || tokenMissing) && now - _lastTokenRenewalAttempt > 5 * 60 * 1000) {
       _lastTokenRenewalAttempt = now
+      console.log(`[relay] renewing session token (${tokenMissing ? 'missing' : 'near expiry'})`)
       try {
         const r = await attemptReconnect({ controlUrl: state.controlUrl, force: true })
-        if (r.reconnected) { state = loadState(); console.log('[relay] relay session token renewed proactively') }
-      } catch {}
+        if (r.reconnected) { state = loadState(); console.log('[relay] relay session token renewed') }
+        else console.log('[relay] session token renewal failed — falling back to next cycle')
+      } catch (err) {
+        console.log(`[relay] session token renewal error: ${err.message}`)
+      }
     }
   }
   if (!state.paired && state.pairingRequestId) {
