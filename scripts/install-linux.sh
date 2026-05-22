@@ -367,6 +367,8 @@ case "\$CLI_CMD" in
       cd "\$INSTALL_DIR" &&
       node --experimental-sqlite --no-warnings --env-file-if-exists=.env --input-type=module -e "import('./src/relay.js').then(async m => { const r = await m.pushHealthDirect(); if (r?.skipped) { console.error(r.reason); process.exit(1) } console.log('Health sent to spinny.au') }).catch(err => { console.error(err?.message || String(err)); process.exit(1) })"
     ) ;;
+  reconnect)
+    (cd "\$INSTALL_DIR" && node --experimental-sqlite --no-warnings --env-file-if-exists=.env src/main.js reconnect) ;;
   help|--help|-h|*)
     echo "Usage: spinny <command>"
     echo "  spinny --update   Pull latest code and restart"
@@ -376,6 +378,7 @@ case "\$CLI_CMD" in
     echo "  spinny pairme2 email   Request pairing from spinny.au"
     echo "  spinny genpairingcode  Generate a fresh pairing code"
     echo "  spinny sendhealth      Push current health to spinny.au"
+    echo "  spinny reconnect       Restore paired state from DB (no re-pairing needed)"
     echo "  spinny status     Show service status"
     echo "  spinny logs       Tail the node log"
     echo "  spinny restart    Restart the service"
