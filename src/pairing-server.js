@@ -71,9 +71,12 @@ export function startPairingServer({ onPaired, pairingPageUrl } = {}) {
       if (url.pathname === "/pair-direct") {
         const code = url.searchParams.get("code");
         const email = url.searchParams.get("email");
+        const origin = req.headers.origin || '';
+        const allowedOrigin = (process.env.SPINNY_CONTROL_URL || 'https://spinny.au').replace(/\/$/, '');
         const corsHeaders = {
-          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Origin": allowedOrigin,
           "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Vary": "Origin",
           "Content-Type": "application/json",
         };
 
