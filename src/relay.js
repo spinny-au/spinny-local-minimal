@@ -73,8 +73,53 @@ function skipLegacyVpsRelayUrl(url, target = 'Cloudflare relay') {
   return true
 }
 
+export async function attemptReconnect({ controlUrl } = {}) {
+  const state = loadState()
+  if (state.paired || !state.nodeId) return { reconnected: false }
+  const identity = ensureNodeIdentity()
+  const base = (controlUrl || state.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au').replace(/\/$/, '')
+  const payload = {
+    nodeId: state.nodeId,
+    nodePublicKey: identity.publicKeyDer,
+    issuedAt: new Date().toISOString(),
+  }
+  try {
+    const res = await fetch(`${base}/api/spinny/local-nodes/reconnect`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ payload, signature: signJson(identity.privateKey, payload) }),
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      console.log(`[relay-reconnect] failed: ${body.error || res.status}`)
+      return { reconnected: false }
+    }
+    const data = await res.json()
+    saveState({
+      ...state,
+      paired: true,
+      accountId: data.accountId,
+      relaySessionToken: data.relaySessionToken,
+      relaySessionExpiresAt: data.relaySessionExpiresAt,
+      relayUrl: data.relayUrl || state.relayUrl,
+    })
+    console.log(`[relay-reconnect] reconnected as ${data.accountId}`)
+    return { reconnected: true }
+  } catch (err) {
+    console.log(`[relay-reconnect] error: ${err.message}`)
+    return { reconnected: false }
+  }
+}
+
 export async function pushHealthDirect() {
   let state = loadState()
+  if (!state.paired && state.nodeId) {
+    try {
+      const r = await attemptReconnect({ controlUrl: state.controlUrl })
+      if (r.reconnected) state = loadState()
+    } catch {}
+  }
   if (!state.paired && state.pairingRequestId) {
     try {
       const pending = await applyPendingPairingRequestApproval({ controlUrl: state.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au' })

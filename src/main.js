@@ -6,7 +6,7 @@ import qrcode from 'qrcode-terminal'
 import { ensureNodeIdentity } from "./identity.js";
 import { ensureVaultKey, Vault } from "./vault.js";
 import { pairNode, pairNodeDirect, requestPairing, getPairingRequestStatus, applyPairingRequestApproval } from "./pairing.js";
-import { RelayClient, startHealthPush, pushHealthDirect } from "./relay.js";
+import { RelayClient, startHealthPush, pushHealthDirect, attemptReconnect } from "./relay.js";
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
 import { startLocalServer } from "./local-server.js";
@@ -109,6 +109,18 @@ try {
     const { monitorEmails, executeEmailAction, sendTelegramNotification, formatTelegramNotification } = await import('./email-vertical.js')
     startSubagentScheduler({ monitorEmails, executeEmailAction, sendTelegramNotification, formatTelegramNotification })
     startRelayInfer()
+
+    // If state.json lost paired status but node is still registered in the DB,
+    // restore it automatically without requiring a new pairing flow.
+    if (!state.paired && state.nodeId) {
+      try {
+        const r = await attemptReconnect({ controlUrl: state.controlUrl || process.env.SPINNY_CONTROL_URL })
+        if (r.reconnected) {
+          console.log('[spinny] state restored from DB — node is paired')
+          Object.assign(state, loadState())
+        }
+      } catch {}
+    }
 
     if (!state.paired) {
       const controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au";
