@@ -130,8 +130,9 @@ export async function requestPairing({ targetEmail, controlUrl = process.env.SPI
   if (body.alreadyPaired) {
     saveState({
       ...state,
-      paired: state.paired || false,
-      accountId: state.accountId || email,
+      paired: true,
+      accountId: email,
+      pairedAt: state.pairedAt || new Date().toISOString(),
       nodePublicKey: identity.publicKeyDer,
       controlUrl: base,
     });
