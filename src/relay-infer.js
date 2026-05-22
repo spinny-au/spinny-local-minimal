@@ -1,4 +1,6 @@
+import { spawn } from 'node:child_process'
 import { loadState } from './state.js'
+import { OllamaClient } from './ollama.js'
 
 const POLL_INTERVAL = 2500
 const TOKEN_BATCH_CHARS = 20
@@ -114,6 +116,63 @@ async function runChatStream(task) {
   }
 }
 
+function fmtBytes(bytes) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`
+}
+
+async function runOllamaPull(task) {
+  const { model } = task.params || {}
+  if (!model) { await postChunk(task.taskId, { error: 'No model specified', done: true, seq: 0 }); return }
+  const client = new OllamaClient()
+  let seq = 0
+  try {
+    for await (const evt of client.pullModelStream(model)) {
+      let content
+      if (evt.total && evt.completed) {
+        const pct = Math.round((evt.completed / evt.total) * 100)
+        content = `${evt.status} — ${pct}% (${fmtBytes(evt.completed)} / ${fmtBytes(evt.total)})`
+      } else {
+        content = evt.status || 'working...'
+      }
+      const done = evt.status === 'success'
+      await postChunk(task.taskId, { content, done, seq: seq++ })
+      if (done) return
+    }
+    await postChunk(task.taskId, { content: 'success', done: true, seq: seq++ })
+  } catch (err) {
+    await postChunk(task.taskId, { error: err.message, done: true, seq: seq })
+  }
+}
+
+async function runOllamaInstall(task) {
+  let seq = 0
+  try {
+    await new Promise((resolve, reject) => {
+      const proc = spawn('sh', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], { stdio: ['ignore', 'pipe', 'pipe'] })
+      let buf = ''
+      const flush = (data) => {
+        buf += data.toString()
+        let nl = buf.indexOf('\n')
+        while (nl !== -1) {
+          const line = buf.slice(0, nl).trim()
+          buf = buf.slice(nl + 1)
+          if (line) postChunk(task.taskId, { content: line, done: false, seq: seq++ }).catch(() => {})
+          nl = buf.indexOf('\n')
+        }
+      }
+      proc.stdout.on('data', flush)
+      proc.stderr.on('data', flush)
+      proc.on('close', code => code === 0 ? resolve() : reject(new Error(`Install script exited ${code}`)))
+      proc.on('error', reject)
+    })
+    await postChunk(task.taskId, { content: 'Ollama installed successfully', done: true, seq: seq++ })
+  } catch (err) {
+    await postChunk(task.taskId, { error: err.message, done: true, seq: seq })
+  }
+}
+
 let polling = false
 
 async function poll() {
@@ -125,6 +184,10 @@ async function poll() {
     console.log(`[relay-infer] task ${task.taskId} type=${task.type}`)
     if (task.type === 'infer.stream') {
       await runChatStream(task)
+    } else if (task.type === 'ollama.pull') {
+      await runOllamaPull(task)
+    } else if (task.type === 'ollama.install') {
+      await runOllamaInstall(task)
     } else {
       await postChunk(task.taskId, { error: `Unknown task type: ${task.type}`, done: true, seq: 0 })
     }

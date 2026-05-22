@@ -8,9 +8,17 @@ import { spinnyHome } from './paths.js'
 let lastCpuSample = null
 
 // Cache ollama list + running model — refreshed every 30s so /api/system is instant
-let ollamaCache = { models: [], running: false, loadedModel: null, updatedAt: 0 }
+let ollamaCache = { models: [], running: false, installed: false, loadedModel: null, updatedAt: 0 }
 
 function refreshOllamaCache() {
+  let installed = false
+  try { execSync('which ollama', { timeout: 2000, stdio: 'pipe' }); installed = true } catch {}
+
+  if (!installed) {
+    ollamaCache = { models: [], running: false, installed: false, loadedModel: null, updatedAt: Date.now() }
+    return
+  }
+
   try {
     const out = execSync('ollama list', { timeout: 8000, stdio: 'pipe' }).toString()
     const lines = out.split('\n').slice(1).filter(Boolean)
@@ -20,7 +28,6 @@ function refreshOllamaCache() {
       return { name: parts[0], size }
     }).filter(m => m.name && m.name !== 'NAME')
 
-    // ollama ps shows which model is currently loaded in RAM
     let loadedModel = null
     try {
       const psOut = execSync('ollama ps', { timeout: 3000, stdio: 'pipe' }).toString()
@@ -28,9 +35,9 @@ function refreshOllamaCache() {
       if (psLines.length > 0) loadedModel = psLines[0].trim().split(/\s+/)[0] || null
     } catch {}
 
-    ollamaCache = { models, running: true, loadedModel, updatedAt: Date.now() }
+    ollamaCache = { models, running: true, installed: true, loadedModel, updatedAt: Date.now() }
   } catch {
-    ollamaCache = { models: ollamaCache.models, running: false, loadedModel: ollamaCache.loadedModel, updatedAt: Date.now() }
+    ollamaCache = { models: ollamaCache.models, running: false, installed: true, loadedModel: ollamaCache.loadedModel, updatedAt: Date.now() }
   }
 }
 
@@ -98,6 +105,7 @@ export function getSystemInfo() {
 
   const ollamaModels = ollamaCache.models
   const ollamaRunning = ollamaCache.running
+  const ollamaInstalled = ollamaCache.installed
   const loadedModel = ollamaCache.loadedModel
 
   // Read package.json for version
@@ -126,6 +134,7 @@ export function getSystemInfo() {
     ram: { total: totalMem, free: freeMem, used: totalMem - freeMem },
     disk,
     gpu,
+    ollamaInstalled,
     ollamaRunning,
     models: ollamaModels,
     loadedModel,
