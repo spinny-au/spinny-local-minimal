@@ -32,9 +32,21 @@ async function renewTokenIf401(status) {
   } finally { _renewInProgress = false }
 }
 
+let _lastClaimDiag = 0
+function diagLog(...args) {
+  // Throttle to once per 30s for normal cases, always log errors
+  const now = Date.now()
+  if (now - _lastClaimDiag > 30000) {
+    console.log(...args)
+    _lastClaimDiag = now
+  }
+}
+
 async function claimTask() {
   const { nodeId, paired, relaySessionToken } = loadState()
-  if (!paired || !nodeId || !relaySessionToken) return null
+  if (!paired) { diagLog('[relay-infer] skip claim: not paired'); return null }
+  if (!nodeId) { diagLog('[relay-infer] skip claim: no nodeId'); return null }
+  if (!relaySessionToken) { diagLog('[relay-infer] skip claim: no relaySessionToken'); return null }
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await fetch(`${baseUrl()}/api/relay/tasks/pending`, {
@@ -43,11 +55,14 @@ async function claimTask() {
       })
       if (res.ok) {
         const data = await res.json()
+        if (data.task) console.log(`[relay-infer] claimed task ${data.task.taskId}`)
         return data.task || null
       }
+      console.log(`[relay-infer] claim got HTTP ${res.status} (attempt ${attempt + 1})`)
       if (await renewTokenIf401(res.status)) continue
       return null
-    } catch {
+    } catch (err) {
+      console.log(`[relay-infer] claim network error: ${err.message}`)
       return null
     }
   }
