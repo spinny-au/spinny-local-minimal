@@ -2,8 +2,8 @@ import { spawn } from 'node:child_process'
 import { loadState } from './state.js'
 import { OllamaClient } from './ollama.js'
 
-const POLL_INTERVAL = 2500
-const TOKEN_BATCH_CHARS = 20
+const POLL_INTERVAL = 1000
+const TOKEN_BATCH_CHARS = 120
 
 function baseUrl() {
   return (loadState().controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au').replace(/\/$/, '')
@@ -35,14 +35,19 @@ async function claimTask() {
 }
 
 async function postChunk(taskId, chunk) {
-  try {
-    await fetch(`${baseUrl()}/api/relay/task/${encodeURIComponent(taskId)}/chunk`, {
-      method: 'POST',
-      headers: nodeHeaders(),
-      body: JSON.stringify(chunk),
-      signal: AbortSignal.timeout(5000),
-    })
-  } catch {}
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`${baseUrl()}/api/relay/task/${encodeURIComponent(taskId)}/chunk`, {
+        method: 'POST',
+        headers: nodeHeaders(),
+        body: JSON.stringify(chunk),
+        signal: AbortSignal.timeout(10000),
+      })
+      if (res.ok) return true
+    } catch {}
+    if (attempt < 2) await new Promise(r => setTimeout(r, 1000))
+  }
+  return false
 }
 
 async function runChatStream(task) {
@@ -101,8 +106,9 @@ async function runChatStream(task) {
               return
             }
             if (batch.length >= TOKEN_BATCH_CHARS) {
-              await postChunk(task.taskId, { content: batch, done: false, seq: seq++ })
-              batch = ''
+              const ok = await postChunk(task.taskId, { content: batch, done: false, seq })
+              if (ok) { seq++; batch = '' }
+              // On failure: keep batch content — it'll be included in the next chunk or the done chunk
             }
           } catch {}
         }

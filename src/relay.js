@@ -6,6 +6,8 @@ import { assertFreshIssuedAt, nodeHello } from "./protocol.js";
 import { getSystemInfo } from "./system-info.js";
 import { applyPendingPairingCodeClaim, applyPendingPairingRequestApproval, requestPairing } from "./pairing.js";
 
+let _lastTokenRenewalAttempt = 0
+
 function derivedRelayUrl(state) {
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
   return 'wss://relay.spinny.au/node'
@@ -73,9 +75,10 @@ function skipLegacyVpsRelayUrl(url, target = 'Cloudflare relay') {
   return true
 }
 
-export async function attemptReconnect({ controlUrl } = {}) {
+export async function attemptReconnect({ controlUrl, force = false } = {}) {
   const state = loadState()
-  if (state.paired || !state.nodeId) return { reconnected: false }
+  if (!force && (state.paired || !state.nodeId)) return { reconnected: false }
+  if (force && !state.nodeId) return { reconnected: false }
   const identity = ensureNodeIdentity()
   const base = (controlUrl || state.controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au').replace(/\/$/, '')
   const payload = {
@@ -119,6 +122,19 @@ export async function pushHealthDirect() {
       const r = await attemptReconnect({ controlUrl: state.controlUrl })
       if (r.reconnected) state = loadState()
     } catch {}
+  }
+  // Proactive token renewal: if the relay session token expires within 30 minutes,
+  // force a reconnect using the node's key pair so health pushes and chunk POSTs keep working.
+  if (state.paired && state.nodeId && state.relaySessionExpiresAt) {
+    const expiresAt = new Date(state.relaySessionExpiresAt).getTime()
+    const now = Date.now()
+    if (expiresAt < now + 30 * 60 * 1000 && now - _lastTokenRenewalAttempt > 5 * 60 * 1000) {
+      _lastTokenRenewalAttempt = now
+      try {
+        const r = await attemptReconnect({ controlUrl: state.controlUrl, force: true })
+        if (r.reconnected) { state = loadState(); console.log('[relay] relay session token renewed proactively') }
+      } catch {}
+    }
   }
   if (!state.paired && state.pairingRequestId) {
     try {
