@@ -7,6 +7,7 @@ import { getSystemInfo } from "./system-info.js";
 import { applyPendingPairingCodeClaim, applyPendingPairingRequestApproval, requestPairing } from "./pairing.js";
 
 let _lastTokenRenewalAttempt = 0
+let _renewalInProgress = false
 
 function derivedRelayUrl(state) {
   if (process.env.SPINNY_RELAY_URL) return process.env.SPINNY_RELAY_URL
@@ -185,6 +186,22 @@ export async function pushHealthDirect() {
     signal: AbortSignal.timeout(8000),
   })
   const body = await response.json().catch(() => ({}))
+  // Server actively rejected our token — renew immediately and retry once.
+  // This covers the case where local state thinks the token is valid for days
+  // but the server has revoked it or its hash no longer matches.
+  if (response.status === 401 && state.relaySessionToken && !_renewalInProgress) {
+    _renewalInProgress = true
+    console.log('[relay] health push rejected (401) — forcing token renewal')
+    try {
+      const r = await attemptReconnect({ controlUrl: state.controlUrl, force: true })
+      if (r.reconnected) {
+        console.log('[relay] token renewed after 401 — retrying health push')
+        _renewalInProgress = false
+        return pushHealthDirect()
+      }
+      console.log('[relay] 401 token renewal failed — server-side credentials are gone, re-pair required')
+    } finally { _renewalInProgress = false }
+  }
   if (!response.ok) {
     const msg = body?.error || body?.detail || `HTTP ${response.status}`
     throw new Error(`health push failed: ${msg}`)
