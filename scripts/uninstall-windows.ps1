@@ -49,14 +49,32 @@ if ($task) {
     warn "Scheduled task not found — may have been removed already"
 }
 
-# 2. Kill node processes and the tray helper (powershell.exe running tray-windows.ps1)
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" -EA SilentlyContinue |
-    Where-Object { $_.CommandLine -like "*SpinnyLocalMinimal*" } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+# 2. Kill node processes — match by install dir OR by the local node port (47821)
+$spinnyNodePids = @()
 
+# By command line (covers most cases)
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" -EA SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*SpinnyLocalMinimal*" -or $_.CommandLine -like "*spinny-local*" -or $_.CommandLine -like "*src\main.js*" } |
+    ForEach-Object { $spinnyNodePids += $_.ProcessId; Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+
+# By TCP port 47821 (catches any node that owns the port regardless of path)
+$portPids = netstat -ano 2>$null | Select-String ':47821\s' | ForEach-Object {
+    ($_ -split '\s+' | Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1)
+} | Where-Object { $_ }
+foreach ($pid in $portPids) {
+    $proc = Get-Process -Id $pid -EA SilentlyContinue
+    if ($proc -and $proc.Name -eq 'node') {
+        $spinnyNodePids += $pid
+        Stop-Process -Id $pid -Force -EA SilentlyContinue
+    }
+}
+
+# Kill tray helper
 Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -EA SilentlyContinue |
     Where-Object { $_.CommandLine -like "*tray-windows.ps1*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+
+if ($spinnyNodePids.Count -gt 0) { ok "Killed Spinny process(es): $($spinnyNodePids -join ', ')" }
 Start-Sleep 1
 
 # 3. Remove app directory
