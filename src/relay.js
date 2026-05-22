@@ -10,16 +10,35 @@ let _lastTokenRenewalAttempt = 0
 let _renewalInProgress = false
 
 const CANONICAL_RELAY_URL = 'wss://spinny-local-relay.spinny-au.workers.dev/node'
+const CANONICAL_CONTROL_URL = 'https://www.spinny.au'
 const KNOWN_BAD_RELAY_URLS = new Set(['wss://relay.spinny.au/node'])
 
+// Force the www subdomain — spinny.au redirects to www.spinny.au, which strips
+// the Authorization header on the redirect. Every fetch from the node MUST go
+// straight to www.spinny.au.
+function canonicalControlUrl(url) {
+  if (!url) return CANONICAL_CONTROL_URL
+  const trimmed = url.replace(/\/$/, '')
+  if (trimmed === 'https://spinny.au' || trimmed === 'http://spinny.au') return CANONICAL_CONTROL_URL
+  return trimmed
+}
+
 // Self-heal nodes whose state.relayUrl got rewritten to a dead endpoint by a
-// previous bad deploy. Runs once on module load.
+// previous bad deploy, and whose state.controlUrl is missing the www prefix.
 ;(() => {
   try {
     const s = loadState()
+    const updates = {}
     if (s.relayUrl && KNOWN_BAD_RELAY_URLS.has(s.relayUrl)) {
-      saveState({ ...s, relayUrl: CANONICAL_RELAY_URL })
-      console.log(`[relay] auto-corrected stale relayUrl → ${CANONICAL_RELAY_URL}`)
+      updates.relayUrl = CANONICAL_RELAY_URL
+    }
+    const canonicalCtrl = canonicalControlUrl(s.controlUrl)
+    if (s.controlUrl !== canonicalCtrl) {
+      updates.controlUrl = canonicalCtrl
+    }
+    if (Object.keys(updates).length > 0) {
+      saveState({ ...s, ...updates })
+      for (const [k, v] of Object.entries(updates)) console.log(`[relay] auto-corrected ${k} → ${v}`)
     }
   } catch {}
 })()

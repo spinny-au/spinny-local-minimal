@@ -7,7 +7,14 @@ const POLL_INTERVAL = 1000
 const TOKEN_BATCH_CHARS = 120
 
 function baseUrl() {
-  return (loadState().controlUrl || process.env.SPINNY_CONTROL_URL || 'https://spinny.au').replace(/\/$/, '')
+  // Canonicalize to www to avoid the spinny.au → www.spinny.au redirect.
+  // fetch drops the Authorization header across redirects, which causes
+  // 401 reason=no_token on every auth-required request.
+  let url = loadState().controlUrl || process.env.SPINNY_CONTROL_URL || 'https://www.spinny.au'
+  url = url.replace(/\/$/, '')
+  if (url === 'https://spinny.au') url = 'https://www.spinny.au'
+  if (url === 'http://spinny.au') url = 'https://www.spinny.au'
+  return url
 }
 
 function nodeHeaders() {
