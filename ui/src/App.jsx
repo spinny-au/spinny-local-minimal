@@ -1,4 +1,42 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
+
+function renderMarkdown(text) {
+  if (!text) return ''
+  let html = text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // code blocks first
+    .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
+      `<pre><code>${code.trimEnd()}</code></pre>`)
+    // inline code
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // headings
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    // bold + italic
+    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    // hr
+    .replace(/^---+$/gm, '<hr>')
+    // unordered list items
+    .replace(/^[\*\-] (.+)$/gm, '<li>$1</li>')
+    // ordered list items
+    .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+    // wrap consecutive <li> in <ul>
+    .replace(/(<li>[\s\S]*?<\/li>)(\n(?=<li>)|(?![\s\S]))/g, '$1')
+  // wrap <li> blocks in <ul>
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>')
+  // paragraphs: blank-line separated blocks not already wrapped in block tags
+  const blockTag = /^<(h[1-6]|ul|ol|pre|hr|blockquote)/
+  html = html.split(/\n\n+/).map(block => {
+    block = block.trim()
+    if (!block) return ''
+    if (blockTag.test(block)) return block
+    return `<p>${block.replace(/\n/g, '<br>')}</p>`
+  }).join('\n')
+  return html
+}
 
 const css = `
 .app { min-height: 100vh; display: flex; flex-direction: column; }
@@ -46,9 +84,21 @@ const css = `
 .chat-bubble-wrap { display: flex; }
 .chat-bubble-wrap.user { justify-content: flex-end; }
 .chat-bubble-wrap.assistant { justify-content: flex-start; }
-.chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.6; max-width: 85%; white-space: pre-wrap; word-break: break-word; }
-.chat-bubble.user { background: var(--accent); color: #fff; border-radius: 12px 12px 2px 12px; }
+.chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.6; max-width: 85%; word-break: break-word; }
+.chat-bubble.user { background: var(--accent); color: #fff; border-radius: 12px 12px 2px 12px; white-space: pre-wrap; }
 .chat-bubble.assistant { background: var(--bg); border: 1px solid var(--bg-border); border-radius: 2px 12px 12px 12px; }
+.chat-bubble.assistant p { margin: 0 0 8px; }
+.chat-bubble.assistant p:last-child { margin-bottom: 0; }
+.chat-bubble.assistant h1,.chat-bubble.assistant h2,.chat-bubble.assistant h3 { margin: 12px 0 4px; font-size: 14px; font-weight: 700; color: var(--text); }
+.chat-bubble.assistant h1 { font-size: 16px; }
+.chat-bubble.assistant ul,.chat-bubble.assistant ol { margin: 4px 0 8px 18px; padding: 0; }
+.chat-bubble.assistant li { margin-bottom: 2px; }
+.chat-bubble.assistant code { background: rgba(255,255,255,0.08); border-radius: 3px; padding: 1px 5px; font-family: monospace; font-size: 12px; }
+.chat-bubble.assistant pre { background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+.chat-bubble.assistant pre code { background: none; padding: 0; font-size: 12px; }
+.chat-bubble.assistant strong { font-weight: 700; color: var(--text); }
+.chat-bubble.assistant em { font-style: italic; color: var(--text-muted); }
+.chat-bubble.assistant hr { border: none; border-top: 1px solid var(--bg-border); margin: 10px 0; }
 .chat-input-row { display: flex; gap: 8px; margin-top: 12px; }
 .chat-textarea { flex: 1; background: var(--bg); border: 1px solid var(--bg-border); border-radius: 6px; color: var(--text); padding: 10px 12px; font-size: 13px; resize: none; outline: none; min-height: 42px; font-family: inherit; }
 .chat-textarea:focus { border-color: var(--accent); }
@@ -962,9 +1012,20 @@ function ChatTab({ sysInfo }) {
         )}
         {messages.map(m => (
           <div key={m.id} className={`chat-bubble-wrap ${m.role}`}>
-            <div className={`chat-bubble ${m.role}`}>
-              {m.content || (m.role === 'assistant' && streaming ? '▋' : '')}
-            </div>
+            {m.role === 'assistant' ? (
+              <div
+                className="chat-bubble assistant"
+                dangerouslySetInnerHTML={{
+                  __html: m.content
+                    ? renderMarkdown(m.content)
+                    : (streaming ? '▋' : '')
+                }}
+              />
+            ) : (
+              <div className="chat-bubble user">
+                {m.content}
+              </div>
+            )}
           </div>
         ))}
         <div ref={bottomRef} />
