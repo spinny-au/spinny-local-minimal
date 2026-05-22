@@ -6,7 +6,7 @@ import qrcode from 'qrcode-terminal'
 import { ensureNodeIdentity } from "./identity.js";
 import { ensureVaultKey, Vault } from "./vault.js";
 import { pairNode, pairNodeDirect, requestPairing, getPairingRequestStatus, applyPairingRequestApproval } from "./pairing.js";
-import { RelayClient, startHealthPush } from "./relay.js";
+import { RelayClient, startHealthPush, pushHealthDirect } from "./relay.js";
 import { loadState, saveState, generatePairingCode } from "./state.js";
 import { runDoctor } from "./doctor.js";
 import { startLocalServer } from "./local-server.js";
@@ -43,10 +43,35 @@ try {
       accountId: state.accountId
     }, null, 2));
 
+  } else if (command === "sendhealth") {
+    const result = await pushHealthDirect()
+    if (result?.skipped) {
+      console.log(result.reason || 'node is not paired')
+      process.exitCode = 1
+    } else {
+      console.log('health pushed ok')
+    }
+
   } else if (command === "pairme2") {
     const email = process.argv[3] || readFlag("--email");
     const result = await requestPairing({ targetEmail: email });
     console.log(JSON.stringify(result, null, 2));
+    // Poll until approved (up to 3 min) so user sees confirmation immediately.
+    // The running daemon will also detect approval via its own poll loop.
+    const deadline = Date.now() + 3 * 60_000
+    process.stdout.write('\nWaiting for approval at spinny.au')
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 5000))
+      const health = await pushHealthDirect().catch(() => null)
+      if (health && !health.skipped) {
+        console.log('\nApproved and health pushed — node is now ONLINE.')
+        break
+      }
+      const s = loadState()
+      if (s.paired) { console.log(`\nApproved! Paired as ${s.accountId}`); break }
+      process.stdout.write('.')
+    }
+    if (!loadState().paired) console.log('\nNot yet approved. Daemon will keep polling.');
 
   } else if (command === "start") {
     ensureNodeIdentity();
@@ -178,11 +203,16 @@ try {
             }
             if (requestStatus.approved && requestStatus.relaySessionToken) {
               pairingClaimSeen = true
-              clearInterval(rotateTimer)
-              clearInterval(pollTimer)
-              const newState = applyPairingRequestApproval(requestStatus, controlUrl)
-              console.log(`[pairme2] APPROVED by ${newState.accountId} - paired! nodeId=${newState.nodeId}`)
-              pairingResolver?.(newState)
+              try {
+                const newState = applyPairingRequestApproval(requestStatus, controlUrl)
+                clearInterval(rotateTimer)
+                clearInterval(pollTimer)
+                console.log(`[pairme2] APPROVED by ${newState.accountId} - paired! nodeId=${newState.nodeId}`)
+                pairingResolver?.(newState)
+              } catch (err) {
+                pairingClaimSeen = false
+                console.error(`[pairme2] applyPairingRequestApproval failed (will retry): ${err.message}`)
+              }
               return
             }
             if (requestStatus.rejected || requestStatus.expired) {
@@ -218,20 +248,25 @@ try {
           }
           if (body.claimed && body.relaySessionToken) {
             pairingClaimSeen = true
-            clearInterval(rotateTimer)
-            clearInterval(pollTimer)
-            console.log(`[relay-pair] CLAIMED by ${body.accountEmail} — relay session received, saving state…`);
-            const newState = saveState({
-              ...loadState(),
-              paired: true,
-              accountId: body.accountEmail,
-              relaySessionToken: body.relaySessionToken,
-              relaySessionExpiresAt: new Date(body.relaySessionExpires * 1000).toISOString(),
-              controlPlanePublicKey: body.controlPlanePublicKey || null,
-              relayUrl: body.relayUrl || null,
-            })
-            console.log(`[relay-pair] SUCCESS — paired! nodeId=${newState.nodeId} accountId=${newState.accountId}`);
-            pairingResolver?.(newState);
+            try {
+              const newState = saveState({
+                ...loadState(),
+                paired: true,
+                accountId: body.accountEmail,
+                relaySessionToken: body.relaySessionToken,
+                relaySessionExpiresAt: new Date(body.relaySessionExpires * 1000).toISOString(),
+                controlPlanePublicKey: body.controlPlanePublicKey || null,
+                relayUrl: body.relayUrl || null,
+              })
+              clearInterval(rotateTimer)
+              clearInterval(pollTimer)
+              console.log(`[relay-pair] CLAIMED by ${body.accountEmail} — relay session received, saving state…`);
+              console.log(`[relay-pair] SUCCESS — paired! nodeId=${newState.nodeId} accountId=${newState.accountId}`);
+              pairingResolver?.(newState);
+            } catch (err) {
+              pairingClaimSeen = false
+              console.error(`[relay-pair] saveState failed (will retry): ${err.message}`)
+            }
           } else if (body.claimed && body.accountEmail) {
             // Fallback: claimed but no relay token yet (node_public_key not in advertisement)
             console.log(`[relay-pair] CLAIMED by ${body.accountEmail} but no relaySessionToken yet — waiting…`)
@@ -243,9 +278,17 @@ try {
         }
       }, 5000);
 
-      // No hard timeout — systemd restarts the service; just wait indefinitely
+      // Safety net: if pairingResolver was never called but state got updated
+      // (e.g. by a CLI pairme2 that applied approval), resolve the promise anyway.
       const pairingPromise = new Promise(resolve => { pairingResolver = resolve });
+      const safetyTimer = setInterval(() => {
+        if (loadState().paired) {
+          clearInterval(safetyTimer)
+          pairingResolver?.(loadState())
+        }
+      }, 10_000)
       await pairingPromise;
+      clearInterval(safetyTimer)
       clearInterval(pollTimer);
     } else {
       // Already paired — start tray immediately
