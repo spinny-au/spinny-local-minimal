@@ -28,21 +28,28 @@ function renderMarkdown(text) {
 }
 
 // Parse :::buttons [A] [B] or :::actions {...} blocks out of message content
-// Returns { text: string, actions: Array<{type,items}> }
+// Returns { text: string, actions: Array<{type,...}> }
 function parseActions(content) {
   if (!content) return { text: content, actions: [] }
+  // normalize line endings
+  const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
   const actions = []
-  const text = content.replace(/:::buttons\s*\n([\s\S]*?)\n?:::/g, (_, inner) => {
-    const items = [...inner.matchAll(/\[([^\]]+)\]/g)].map(m => ({ label: m[1], value: m[1] }))
-    if (items.length) actions.push({ type: 'buttons', items })
-    return ''
-  }).replace(/:::actions\s*(\{[\s\S]*?\})\s*:::/g, (_, json) => {
-    try {
-      const parsed = JSON.parse(json)
-      if (parsed.type && Array.isArray(parsed.items)) actions.push(parsed)
-    } catch {}
-    return ''
-  }).trim()
+  const text = normalized
+    // :::buttons [A] [B] ... ::: — blank lines between markers are ok
+    .replace(/:::buttons([\s\S]*?):::/g, (_, inner) => {
+      const items = [...inner.matchAll(/\[([^\]]+)\]/g)].map(m => ({ label: m[1], value: m[1] }))
+      if (items.length) actions.push({ type: 'buttons', items })
+      return ''
+    })
+    // :::actions { ... } :::
+    .replace(/:::actions\s*(\{[\s\S]*?\})\s*:::/g, (_, json) => {
+      try {
+        const parsed = JSON.parse(json)
+        if (parsed.type) actions.push(parsed)
+      } catch {}
+      return ''
+    })
+    .trim()
   return { text, actions }
 }
 
