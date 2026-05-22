@@ -8,6 +8,13 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+$createdNew = $false
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$mutex = [System.Threading.Mutex]::new($true, "Local\SpinnyLocalMinimalTray-$sid", [ref]$createdNew)
+if (-not $createdNew) {
+  return
+}
+
 function Read-TextFile([string]$Path, [string]$Fallback) {
   try {
     if (Test-Path -LiteralPath $Path) {
@@ -77,3 +84,5 @@ $timer.Start()
 $timer.Stop()
 $notify.Visible = $false
 $notify.Dispose()
+$mutex.ReleaseMutex()
+$mutex.Dispose()

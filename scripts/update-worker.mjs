@@ -51,6 +51,20 @@ async function runNpmInstall() {
 async function restartNode() {
   if (process.platform === 'win32') {
     const taskName = 'SpinnyLocalNode'
+    await new Promise(resolve => {
+      const ps = spawn('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        'Get-CimInstance Win32_Process -Filter "Name=\'powershell.exe\'" -EA SilentlyContinue | Where-Object { $_.CommandLine -like "*tray-windows.ps1*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }',
+      ], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+        windowsHide: true,
+      })
+      ps.on('close', () => resolve(undefined))
+      ps.on('error', err => { log(`tray cleanup error: ${err.message}`); resolve(undefined) })
+    })
     // End the task first — if Task Scheduler still thinks it's Running (process
     // already gone but state not yet flushed), /run is a silent no-op.
     await new Promise(resolve => {
