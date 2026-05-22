@@ -196,6 +196,10 @@ export function applyPairingCodeClaim(body, controlUrl = process.env.SPINNY_CONT
     controlUrl: controlUrl.replace(/\/$/, ""),
     pairingCode: null,
     pairingCodeIssuedAt: null,
+    pairingRequestId: null,
+    pairingRequestEmail: null,
+    pairingRequestIssuedAt: null,
+    pairingRequestExpiresAt: null,
   });
 }
 
