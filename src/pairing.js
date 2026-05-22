@@ -160,6 +160,45 @@ export async function getPairingRequestStatus({
   return body;
 }
 
+export async function getPairingCodeStatus({
+  pairingCode,
+  nodeId,
+  controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au",
+}) {
+  if (!pairingCode || !nodeId) return { waiting: false, expired: true };
+  const base = controlUrl.replace(/\/$/, "");
+  const url = `${base}/api/spinny/pairing/status?code=${encodeURIComponent(String(pairingCode).toUpperCase())}&nodeId=${encodeURIComponent(nodeId)}`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  const body = await response.json().catch(async () => ({ error: await response.text().catch(() => "") }));
+  if (!response.ok) throw new Error(`Pairing code poll failed: ${response.status} ${body.error || JSON.stringify(body)}`);
+  return body;
+}
+
+export function applyPairingCodeClaim(body, controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au") {
+  const state = loadState();
+  const identity = ensureNodeIdentity();
+  const accountEmail = String(body.accountEmail || "").toLowerCase().trim();
+  const relaySessionToken = String(body.relaySessionToken || "");
+  const relaySessionExpires = Number(body.relaySessionExpires || 0);
+  if (!accountEmail || !accountEmail.includes("@")) throw new Error("Pairing claim is missing account email");
+  if (!relaySessionToken || !relaySessionExpires) throw new Error("Pairing claim is missing relay session");
+
+  return saveState({
+    ...state,
+    paired: true,
+    accountId: accountEmail,
+    pairedAt: new Date().toISOString(),
+    relaySessionToken,
+    relaySessionExpiresAt: new Date(relaySessionExpires * 1000).toISOString(),
+    nodePublicKey: identity.publicKeyDer,
+    controlPlanePublicKey: body.controlPlanePublicKey || null,
+    relayUrl: body.relayUrl || null,
+    controlUrl: controlUrl.replace(/\/$/, ""),
+    pairingCode: null,
+    pairingCodeIssuedAt: null,
+  });
+}
+
 export function applyPairingRequestApproval(body, controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au") {
   const state = loadState();
   const identity = ensureNodeIdentity();
@@ -213,6 +252,32 @@ export async function applyPendingPairingRequestApproval({
   return {
     applied: false,
     reason: status.rejected ? "rejected" : status.expired ? "expired" : "waiting",
+    status,
+    state,
+  };
+}
+
+export async function applyPendingPairingCodeClaim({
+  controlUrl = process.env.SPINNY_CONTROL_URL || "https://spinny.au",
+} = {}) {
+  const state = loadState();
+  if (state.paired) return { applied: false, reason: "already paired", state };
+  if (!state.pairingCode || !state.nodeId) {
+    return { applied: false, reason: "no pending pairing code", state };
+  }
+
+  const status = await getPairingCodeStatus({
+    pairingCode: state.pairingCode,
+    nodeId: state.nodeId,
+    controlUrl: state.controlUrl || controlUrl,
+  });
+  if (status.claimed && status.relaySessionToken) {
+    const next = applyPairingCodeClaim(status, state.controlUrl || controlUrl);
+    return { applied: true, reason: "claimed", state: next };
+  }
+  return {
+    applied: false,
+    reason: status.expired ? "expired" : "waiting",
     status,
     state,
   };

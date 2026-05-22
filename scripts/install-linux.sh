@@ -471,7 +471,7 @@ if $HEADLESS; then
   fi
 
   # ── Authenticate Tailscale ───────────────────────────────────────────────────
-  TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+  TAILSCALE_IP=$(tailscale ip --4 2>/dev/null | head -n1 || echo '')
   if [[ -z "$TAILSCALE_IP" ]]; then
     if [[ -n "$TS_AUTHKEY" ]]; then
       # Pre-auth key supplied — silent, non-interactive
@@ -497,13 +497,13 @@ if $HEADLESS; then
       echo -e "  ${DIM}Waiting up to 3 minutes for authentication...${RST}"
       for i in $(seq 1 180); do
         sleep 1
-        TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+        TAILSCALE_IP=$(tailscale ip --4 2>/dev/null | head -n1 || echo '')
         [[ -n "$TAILSCALE_IP" ]] && break
       done
       kill "$TS_PID" 2>/dev/null || true
       rm -f /tmp/ts-up.log
     fi
-    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null | head -n1 || echo '')
   fi
 
   if [[ -n "$TAILSCALE_IP" ]]; then
@@ -539,7 +539,7 @@ if $HEADLESS; then
   fi
 else
   if command -v tailscale &>/dev/null; then
-    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null | head -n1 || echo '')
     TAILSCALE_STR="${TAILSCALE_IP:+● Connected  •  $TAILSCALE_IP}${TAILSCALE_IP:-○ Installed (not connected)}"
   fi
 fi

@@ -12,7 +12,7 @@ let ollamaCache = { models: [], running: false, loadedModel: null, updatedAt: 0 
 
 function refreshOllamaCache() {
   try {
-    const out = execSync('ollama list', { timeout: 8000 }).toString()
+    const out = execSync('ollama list', { timeout: 8000, stdio: 'pipe' }).toString()
     const lines = out.split('\n').slice(1).filter(Boolean)
     const models = lines.map(l => {
       const parts = l.trim().split(/\s+/)
@@ -23,7 +23,7 @@ function refreshOllamaCache() {
     // ollama ps shows which model is currently loaded in RAM
     let loadedModel = null
     try {
-      const psOut = execSync('ollama ps', { timeout: 3000 }).toString()
+      const psOut = execSync('ollama ps', { timeout: 3000, stdio: 'pipe' }).toString()
       const psLines = psOut.split('\n').slice(1).filter(l => l.trim())
       if (psLines.length > 0) loadedModel = psLines[0].trim().split(/\s+/)[0] || null
     } catch {}

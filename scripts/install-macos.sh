@@ -446,12 +446,12 @@ if $HEADLESS; then
   fi
   if command -v tailscale &>/dev/null; then
     sudo tailscale up --accept-routes 2>/dev/null || true
-    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null | head -n1 || echo '')
     TAILSCALE_STR="${TAILSCALE_IP:+● Connected  •  $TAILSCALE_IP}${TAILSCALE_IP:-○ Installed — run: sudo tailscale up}"
   fi
 else
   if command -v tailscale &>/dev/null; then
-    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null || echo '')
+    TAILSCALE_IP=$(tailscale ip --4 2>/dev/null | head -n1 || echo '')
     TAILSCALE_STR="${TAILSCALE_IP:+● Connected  •  $TAILSCALE_IP}${TAILSCALE_IP:-○ Installed (not connected)}"
   fi
 fi
