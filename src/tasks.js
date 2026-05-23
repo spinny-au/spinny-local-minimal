@@ -1,10 +1,12 @@
 import { OllamaClient } from "./ollama.js";
-import { loadState } from "./state.js";
+import { loadState, saveState } from "./state.js";
 import { taskProgress, taskResult } from "./protocol.js";
 import { Vault } from "./vault.js";
 import { importModelBundleFromUrl } from "./model-bundles.js";
 import { getSystemInfo } from "./system-info.js";
 import { getLines } from "./log-buffer.js";
+import { runAttestation } from "./attestation.js";
+import { cachedReleaseList, captureForensicSnapshot, healTier1 } from "./recovery.js";
 import {
   captureFeedback,
   completeGmailOAuth,
@@ -36,6 +38,37 @@ export async function handleTask(task, { send, ollama = new OllamaClient() } = {
   const state = loadState();
   if (!state.paired) throw new Error("Node is not paired");
   if (task.nodeId !== state.nodeId) throw new Error("Task is addressed to a different node");
+  if ((state.security?.quarantined || state.security?.tampered) && !String(task.type || "").startsWith("security.")) {
+    throw new Error("Node is quarantined by security attestation");
+  }
+
+  if (task.type === "security.reattest") {
+    const result = await runAttestation();
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "security.heal_from_cache") {
+    const diff = state.security?.diff || [];
+    const snapshot = captureForensicSnapshot(diff);
+    const result = healTier1(diff);
+    await runAttestation();
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result: { ...result, snapshot } }));
+    return { ...result, snapshot };
+  }
+
+  if (task.type === "security.freeze_auto_heal") {
+    const next = saveState({ ...state, security: { ...(state.security || {}), autoHealFrozen: true, autoHealFrozenAt: new Date().toISOString() } });
+    const result = { ok: true, autoHealFrozen: true, security: next.security };
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
+
+  if (task.type === "security.cached_releases") {
+    const result = { releases: cachedReleaseList() };
+    await send?.(taskResult({ taskId: task.taskId, status: "complete", result }));
+    return result;
+  }
 
   if (task.type === "model.install") {
     const model = task.params?.model;

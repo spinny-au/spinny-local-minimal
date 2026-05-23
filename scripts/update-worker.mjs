@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
+import { cacheVerifiedRelease, verifyGitCommit, verifyWorkingTree } from '../src/release-manifest.js'
 
 const repoRoot = resolve(process.argv[2] || join(import.meta.dirname, '..'))
 const mode = process.argv[3] || 'apply'
@@ -115,11 +116,16 @@ async function main() {
 
     if (mode === 'apply') {
       if (await run(process.platform === 'win32' ? 'git.exe' : 'git', ['fetch', 'origin', 'main']) !== 0) throw new Error('git fetch failed')
+      const targetCommit = await gitOutput(['rev-parse', 'origin/main'])
+      await verifyGitCommit(repoRoot, targetCommit)
       if (await run(process.platform === 'win32' ? 'git.exe' : 'git', ['reset', '--hard', 'origin/main']) !== 0) throw new Error('git reset failed')
+      cacheVerifiedRelease(repoRoot, await verifyWorkingTree(repoRoot))
       if (await runNpmInstall() !== 0) throw new Error('npm install failed')
     } else if (mode === 'rollback') {
       if (!target || target === 'null') throw new Error('missing rollback target')
+      await verifyGitCommit(repoRoot, target)
       if (await run(process.platform === 'win32' ? 'git.exe' : 'git', ['reset', '--hard', target]) !== 0) throw new Error('git reset failed')
+      cacheVerifiedRelease(repoRoot, await verifyWorkingTree(repoRoot))
       if (await runNpmInstall() !== 0) throw new Error('npm install failed')
     } else if (mode === 'restart') {
       // no-op; just relaunch below
@@ -136,3 +142,20 @@ async function main() {
 }
 
 main()
+
+function gitOutput(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.platform === 'win32' ? 'git.exe' : 'git', args, {
+      cwd: repoRoot,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', d => { out += d })
+    child.stderr.on('data', d => { err += d })
+    child.on('error', reject)
+    child.on('close', code => code === 0 ? resolve(out.trim()) : reject(new Error(err.trim() || `git ${args.join(' ')} failed`)))
+  })
+}

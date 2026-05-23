@@ -1,5 +1,7 @@
 # spinny-local-minimal
 
+Security: signed releases | attested runtime | zero-PII telemetry
+
 Minimal local companion node for Spinny.
 
 ## Install (Windows)

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Vault } from "../src/vault.js";
@@ -29,6 +30,10 @@ import {
   savePrivacyPolicy
 } from "../src/instruction-handler.js";
 import { logEvent, parseConsoleTag, scrubSecrets, stopLogStreamer } from "../src/log-streamer.js";
+import { appendSecurityEvent, verifySecurityChain } from "../src/security-log.js";
+import { assertAllowed, NetworkViolation } from "../src/secure-fetch.js";
+import { isQuarantined } from "../src/attestation.js";
+import { decryptJson, deriveStorageKey, encryptJson } from "../src/storage-crypto.js";
 
 const tests = [];
 
@@ -69,6 +74,46 @@ test("node identity signs and verifies task envelopes", () => {
   assert.equal(verifyJson(identity.publicKeyDer, payload, signature), true);
 });
 
+test("state is encrypted at rest and migrates away from plaintext state.json", () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-state-enc-test-"));
+  const state = saveState({ paired: true, accountId: "owner@example.com", relaySessionToken: "srly_secret" });
+  const encPath = join(process.env.SPINNY_HOME, "state.enc");
+  assert.equal(existsSync(encPath), true);
+  const sealed = readFileSync(encPath, "utf8");
+  assert.equal(sealed.includes("srly_secret"), false);
+  assert.equal(state.accountId, "owner@example.com");
+});
+
+test("security log chain detects edits and deletions", () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-chain-test-"));
+  const first = appendSecurityEvent("attestation.result", { status: "verified" });
+  const second = appendSecurityEvent("network.violation", { url_host: "evil.example" });
+  assert.equal(verifySecurityChain().ok, true);
+  const logPath = join(process.env.SPINNY_HOME, "security.jsonl");
+  const lines = readFileSync(logPath, "utf8").trim().split(/\r?\n/);
+  const edited = JSON.parse(lines[0]);
+  edited.metadata.status = "tampered";
+  lines[0] = canonicalJson(edited);
+  writeFileSync(logPath, `${lines.join("\n")}\n`, "utf8");
+  assert.equal(verifySecurityChain().reason, "entry_hash_mismatch");
+  writeFileSync(logPath, `${canonicalJson(first)}\n`, "utf8");
+  assert.equal(verifySecurityChain(second.entry_hash).reason, "expected_tip_mismatch");
+});
+
+test("secure fetch allowlist blocks unknown hosts and logs violation", () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-egress-test-"));
+  assert.doesNotThrow(() => assertAllowed("https://www.spinny.au/api/health"));
+  assert.throws(() => assertAllowed("https://evil.example/steal"), NetworkViolation);
+  assert.match(readFileSync(join(process.env.SPINNY_HOME, "security.jsonl"), "utf8"), /network\.violation/);
+});
+
+test("encrypted JSON helper round-trips without plaintext", () => {
+  const key = deriveStorageKey("node-private-key");
+  const sealed = encryptJson({ secret: "hidden" }, key);
+  assert.equal(sealed.includes("hidden"), false);
+  assert.deepEqual(decryptJson(sealed, key), { secret: "hidden" });
+});
+
 test("model install is only handled for paired node addressed tasks", async () => {
   process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-task-test-"));
   const state = saveState({ paired: true, accountId: "acct_1" });
@@ -89,6 +134,21 @@ test("model install is only handled for paired node addressed tasks", async () =
   assert.deepEqual(result, { ok: true, model: "llama3.2:3b" });
   assert.equal(messages[0].type, "task.progress");
   assert.equal(messages.at(-1).type, "task.result");
+});
+
+test("quarantined nodes refuse non-security tasks", async () => {
+  process.env.SPINNY_HOME = mkdtempSync(join(tmpdir(), "spinny-local-quarantine-test-"));
+  const state = saveState({ paired: true, accountId: "acct_1", security: { tampered: true, quarantined: true } });
+  assert.equal(isQuarantined(), true);
+  await assert.rejects(() => handleTask({
+    type: "model.install",
+    taskId: "task_quarantine",
+    nodeId: state.nodeId,
+    issuedAt: new Date().toISOString(),
+    params: { model: "llama3.2:3b" }
+  }, {
+    ollama: { pullModel: async () => ({ ok: true }) }
+  }), /quarantined/);
 });
 
 test("vertical attach persists only local public status in encrypted vault", async () => {

@@ -26,6 +26,8 @@ export async function pairNodeDirect({ accountEmail, pairingCode, controlUrl = p
     pairingCode: pairingCode || state.pairingCode || null,
     client: "spinny-local-minimal",
     version: "0.1.0",
+    issuedAt: new Date().toISOString(),
+    nonce: randomBytes(16).toString("hex"),
     ...gitFingerprint(),
   };
   const signature = signJson(identity.privateKey, payload);
@@ -64,6 +66,8 @@ export async function pairNode({ token, controlUrl = process.env.SPINNY_CONTROL_
     pairingToken: token,
     client: "spinny-local-minimal",
     version: "0.1.0",
+    issuedAt: new Date().toISOString(),
+    nonce: randomBytes(16).toString("hex"),
     ...gitFingerprint(),
   };
   const signature = signJson(identity.privateKey, payload);
@@ -111,6 +115,7 @@ export async function requestPairing({ targetEmail, controlUrl = process.env.SPI
     client: "spinny-local-minimal",
     version: "0.1.0",
     issuedAt: new Date().toISOString(),
+    nonce: randomBytes(16).toString("hex"),
     ...gitFingerprint(),
   };
   const signature = signJson(identity.privateKey, payload);

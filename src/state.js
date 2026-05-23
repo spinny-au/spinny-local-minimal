@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { statePath } from "./paths.js";
+import { stateEncPath, statePath } from "./paths.js";
 import { ensureNodeIdentity } from "./identity.js";
+import { decryptJson, deriveStorageKey, encryptJson } from "./storage-crypto.js";
 
 const NODE_ADJECTIVES = [
   'aurora','falcon','nova','echo','titan','sage','drift','flare','crest','pulse',
@@ -43,10 +44,17 @@ export function generatePairingCode() {
 }
 
 export function loadState() {
+  const encPath = stateEncPath();
+  if (existsSync(encPath)) {
+    return { ...DEFAULT_STATE, ...decryptJson(readFileSync(encPath, "utf8"), storageKey(), "spinny-state-v1") };
+  }
   if (!existsSync(statePath())) {
     return { ...DEFAULT_STATE };
   }
-  return { ...DEFAULT_STATE, ...JSON.parse(readFileSync(statePath(), "utf8")) };
+  const migrated = { ...DEFAULT_STATE, ...JSON.parse(readFileSync(statePath(), "utf8")) };
+  saveState(migrated);
+  try { renameSync(statePath(), `${statePath()}.migrated`); } catch {}
+  return migrated;
 }
 
 export function saveState(state) {
@@ -65,6 +73,12 @@ export function saveState(state) {
   if (!next.createdAt) {
     next.createdAt = next.updatedAt;
   }
-  writeFileSync(statePath(), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  writeFileSync(stateEncPath(), `${encryptJson(next, storageKey(), "spinny-state-v1")}\n`, { encoding: "utf8", mode: 0o600 });
   return next;
+}
+
+function storageKey() {
+  const { privateKey } = ensureNodeIdentity();
+  const privateDer = privateKey.export({ type: "pkcs8", format: "der" });
+  return deriveStorageKey(privateDer);
 }

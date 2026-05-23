@@ -16,6 +16,10 @@ import { startSubagentScheduler, listSubagents } from "./subagent-scheduler.js"
 import { startRelayInfer } from "./relay-infer.js";
 import { startTray } from "./tray.js";
 import { ensureEnvDefaults } from "./ensure-env.js";
+import { installSecureFetch } from "./secure-fetch.js";
+import { postSecurityChainTip, startRuntimeAttestation } from "./attestation.js";
+
+installSecureFetch();
 
 const command = process.argv[2] || "start";
 
@@ -34,6 +38,7 @@ try {
       paired: state.paired,
       accountId: state.accountId,
       hasNodePublicKey: Boolean(state.nodePublicKey),
+      security: state.security || {},
       vault: "ready"
     }, null, 2));
 
@@ -107,6 +112,8 @@ try {
     ensureNodeIdentity();
     ensureVaultKey();
     ensureEnvDefaults();
+    startRuntimeAttestation();
+    setInterval(() => postSecurityChainTip().catch(() => {}), 60_000).unref();
     let state = loadState();
 
     let relayConnected = false;

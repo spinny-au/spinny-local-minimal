@@ -1,10 +1,12 @@
 import { EventEmitter } from "node:events";
+import { randomBytes } from "node:crypto";
 import { ensureNodeIdentity, signJson, verifyJson } from "./identity.js";
 import { loadState, saveState } from "./state.js";
 import { handleTask } from "./tasks.js";
 import { assertFreshIssuedAt, nodeHello } from "./protocol.js";
 import { getSystemInfo } from "./system-info.js";
 import { applyPendingPairingCodeClaim, applyPendingPairingRequestApproval, requestPairing } from "./pairing.js";
+import { appendSecurityEvent } from "./security-log.js";
 
 let _lastTokenRenewalAttempt = 0
 let _renewalInProgress = false
@@ -213,10 +215,18 @@ export async function pushHealthDirect() {
     headers['authorization'] = `Bearer ${state.relaySessionToken}`
     headers['x-spinny-node-id'] = state.nodeId
   }
+  const identity = ensureNodeIdentity()
+  const payload = {
+    type: 'node.health',
+    nodeId: state.nodeId,
+    issuedAt: new Date().toISOString(),
+    nonce: cryptoNonce(),
+    health: getSystemInfo(),
+  }
   const response = await fetch(`${base}/api/spinny/local-nodes/${encodeURIComponent(state.nodeId)}/health`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ health: getSystemInfo() }),
+    body: JSON.stringify({ payload, signature: signJson(identity.privateKey, payload) }),
     signal: AbortSignal.timeout(8000),
   })
   const body = await response.json().catch(() => ({}))
@@ -253,12 +263,14 @@ function healthMessage() {
     return {
       type: "node.health",
       issuedAt: new Date().toISOString(),
+      nonce: cryptoNonce(),
       health: getSystemInfo()
     }
   } catch (error) {
     return {
       type: "node.health",
       issuedAt: new Date().toISOString(),
+      nonce: cryptoNonce(),
       health: { error: error.message || "Failed to collect system health" }
     }
   }
@@ -352,9 +364,10 @@ export class RelayClient extends EventEmitter {
     });
 
     socket.addEventListener("message", async (event) => {
+      let msgType = "unknown";
       try {
         const envelope = JSON.parse(event.data);
-        const msgType = envelope?.payload?.type || envelope?.type || "unknown";
+        msgType = envelope?.payload?.type || envelope?.type || "unknown";
         logRelay(`received message type=${msgType}`);
         if (typeof msgType === "string" && msgType.startsWith("relay.")) return;
         const task = this.verifyEnvelope(envelope, state.nodeId);
@@ -362,6 +375,7 @@ export class RelayClient extends EventEmitter {
       } catch (error) {
         this.lastError = error.message;
         logRelay(`message handling failed: ${error.message}`);
+        appendSecurityEvent("security.protocol_violation", { error: error.message, message_type: msgType });
         this.sendSigned({ type: "task.error", message: error.message, issuedAt: new Date().toISOString() }, identity.privateKey);
       }
     });
@@ -460,4 +474,8 @@ export class RelayClient extends EventEmitter {
     logRelay(`reconnect attempt ${attempt} scheduled in ${delay}ms`);
     setTimeout(() => this.connect(), delay);
   }
+}
+
+function cryptoNonce() {
+  return randomBytes(16).toString("hex");
 }

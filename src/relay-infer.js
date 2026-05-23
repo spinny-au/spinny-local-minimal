@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process'
+import { createHash, randomBytes } from 'node:crypto'
 import { loadState } from './state.js'
 import { OllamaClient } from './ollama.js'
 import { attemptReconnect } from './relay.js'
 import { captureChildStderr, logEvent } from './log-streamer.js'
+import { isQuarantined } from './attestation.js'
+import { canonicalJson, ensureNodeIdentity, signJson } from './identity.js'
 
 const POLL_INTERVAL = 1000
 const TOKEN_BATCH_CHARS = 120
@@ -18,12 +21,35 @@ function baseUrl() {
   return url
 }
 
-function nodeHeaders() {
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function signedRequestHeaders(path, body = null) {
+  const { nodeId } = loadState()
+  if (!nodeId) return {}
+  const identity = ensureNodeIdentity()
+  const payload = {
+    type: 'node.request',
+    nodeId,
+    path,
+    body_sha256: sha256(canonicalJson(body)),
+    issuedAt: new Date().toISOString(),
+    nonce: randomBytes(16).toString('hex'),
+  }
+  return {
+    'x-spinny-signed-payload': Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url'),
+    'x-spinny-signature': signJson(identity.privateKey, payload),
+  }
+}
+
+function nodeHeaders(path, body = null) {
   const { relaySessionToken, nodeId } = loadState()
   return {
     'content-type': 'application/json',
     'x-spinny-node-id': nodeId || '',
     authorization: `Bearer ${relaySessionToken || ''}`,
+    ...signedRequestHeaders(path, body),
   }
 }
 
@@ -52,13 +78,15 @@ function diagLog(...args) {
 
 async function claimTask() {
   const { nodeId, paired, relaySessionToken } = loadState()
+  if (isQuarantined()) { diagLog('[relay-infer] skip claim: node is quarantined by security attestation'); return null }
   if (!paired) { diagLog('[relay-infer] skip claim: not paired'); return null }
   if (!nodeId) { diagLog('[relay-infer] skip claim: no nodeId'); return null }
   if (!relaySessionToken) { diagLog('[relay-infer] skip claim: no relaySessionToken'); return null }
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(`${baseUrl()}/api/relay/tasks/pending`, {
-        headers: nodeHeaders(),
+      const path = '/api/relay/tasks/pending'
+      const res = await fetch(`${baseUrl()}${path}`, {
+        headers: nodeHeaders(path),
         signal: AbortSignal.timeout(5000),
       })
       if (res.ok) {
@@ -84,9 +112,10 @@ async function claimTask() {
 async function postChunk(taskId, chunk) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(`${baseUrl()}/api/relay/task/${encodeURIComponent(taskId)}/chunk`, {
+      const path = `/api/relay/task/${encodeURIComponent(taskId)}/chunk`
+      const res = await fetch(`${baseUrl()}${path}`, {
         method: 'POST',
-        headers: nodeHeaders(),
+        headers: nodeHeaders(path, chunk),
         body: JSON.stringify(chunk),
         signal: AbortSignal.timeout(10000),
       })

@@ -159,6 +159,12 @@ else
   ok "Cloned"
 fi
 
+if [[ "${SPINNY_REQUIRE_SIGNED_RELEASES:-1}" != "0" && "${SPINNY_REQUIRE_SIGNED_RELEASES:-1}" != "false" ]]; then
+  step "Verifying signed release"
+  node "$INSTALL_DIR/src/security-cli.js" verify-current "$INSTALL_DIR"
+  ok "Signed release verified"
+fi
+
 # ── 6. npm install ────────────────────────────────────────────────────────────
 step "Installing npm dependencies"
 npm install --prefix "$INSTALL_DIR" --omit=dev --silent
@@ -217,12 +223,12 @@ ok "Service started"
 # ── 9. Wait for state + collect info ──────────────────────────────────────────
 step "Collecting system info"
 
-# Retry up to 30s for the pairing code to appear in state.json
-STATE_FILE="$STATE_DIR/state.json"
+# Retry up to 30s for the pairing code to appear in encrypted local state
 PAIRING_CODE=""
 for i in $(seq 1 30); do
   sleep 1
-  PAIRING_CODE=$(grep -oP '(?<="pairingCode":")[A-Z0-9]+' "$STATE_FILE" 2>/dev/null || true)
+  PAIRING_CODE=$(cd "$INSTALL_DIR" && node --experimental-sqlite --no-warnings --env-file-if-exists="$ENV_FILE" src/main.js pairingcode 2>/dev/null \
+    | grep -oP '(?<="pairingCode": ")[A-Z0-9]+' || true)
   [[ -n "$PAIRING_CODE" ]] && break
 done
 

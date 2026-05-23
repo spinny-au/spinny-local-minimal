@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 export const CLIENT_VERSION = "0.1.0";
 export const PROTOCOL_VERSION = 1;
 export const TASK_MAX_AGE_MS = 5 * 60 * 1000;
@@ -17,7 +19,8 @@ export function nodeHello({ state, relaySessionToken, nodePublicKey }) {
     nodeId: state.nodeId,
     relaySessionToken,
     nodePublicKey,
-    issuedAt: new Date().toISOString()
+    issuedAt: new Date().toISOString(),
+    nonce: cryptoNonce()
   };
 }
 
@@ -28,7 +31,8 @@ export function taskResult({ taskId, status, result = null, error = null }) {
     status,
     result,
     error,
-    issuedAt: new Date().toISOString()
+    issuedAt: new Date().toISOString(),
+    nonce: cryptoNonce()
   };
 }
 
@@ -38,6 +42,11 @@ export function taskProgress({ taskId, status, detail = null }) {
     taskId,
     status,
     detail,
-    issuedAt: new Date().toISOString()
+    issuedAt: new Date().toISOString(),
+    nonce: cryptoNonce()
   };
+}
+
+function cryptoNonce() {
+  return randomBytes(16).toString("hex");
 }
