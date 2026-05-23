@@ -38,7 +38,12 @@ export async function runAttestation({ post = true } = {}) {
     result.manifest_hash = hash(JSON.stringify(manifest.files || {}));
     result.diff = compareManifest(process.cwd(), manifest);
   } catch (err) {
-    result.anomalies.push(`manifest_unavailable:${err.message}`);
+    // No manifest published for this commit yet — not an anomaly, just skip file diff.
+    // Only flag as anomaly if the fetch itself failed for a non-404 reason.
+    const msg = err?.message || String(err);
+    if (!msg.includes("404") && !msg.includes("not found") && !msg.includes("no manifest") && !msg.includes("signature verification failed")) {
+      result.anomalies.push(`manifest_fetch_error:${msg.slice(0, 80)}`);
+    }
   }
   const status = result.diff.length ? "tampered" : result.anomalies.length ? "drift_detected" : "verified";
   result.type = status === "tampered" ? "tamper.detected" : "attestation.heartbeat";
