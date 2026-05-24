@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, rmSync } from 'node:fs'
 import { join, extname, dirname } from 'node:path'
 import { spawn, execSync } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -92,7 +92,7 @@ function restartProcess() {
       detached: true, stdio: 'ignore', cwd: REPO_ROOT, env: process.env,
     }).unref()
   }
-  setTimeout(() => process.exit(0), 800)
+  setTimeout(() => process.exit(0), 8000)
 }
 
 function startUpdateWorker(mode, target = '') {
@@ -109,7 +109,31 @@ function startUpdateWorker(mode, target = '') {
     env: process.env,
   })
   child.unref()
-  setTimeout(() => process.exit(0), 500)
+  const signalPath = join(REPO_ROOT, '.update-signal')
+  let restarted = false
+  let attempts = 0
+  const maxAttempts = 60
+  const poll = setInterval(() => {
+    attempts++
+    if (existsSync(signalPath)) {
+      clearInterval(poll)
+      try {
+        const signal = JSON.parse(readFileSync(signalPath, 'utf8'))
+        logEvent('update', 'signal', `status=${signal.status} mode=${signal.mode} error=${signal.error || 'none'}`)
+      } catch {}
+      try { rmSync(signalPath) } catch {}
+      restarted = true
+      restartProcess()
+    } else if (attempts >= maxAttempts) {
+      clearInterval(poll)
+      logEvent('update', 'timeout', 'No signal after 60s; restarting anyway')
+      restarted = true
+      restartProcess()
+    }
+  }, 1000)
+  setTimeout(() => {
+    if (!restarted) process.exit(0)
+  }, 120000)
 }
 
 function openExternal(target) {
