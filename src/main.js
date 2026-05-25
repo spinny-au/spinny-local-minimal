@@ -105,9 +105,23 @@ try {
 
   } else if (command === "start") {
     ensureNodeIdentity();
-    ensureVaultKey();
     ensureEnvDefaults();
     let state = loadState();
+
+    // ── KeyGuard — spawn headless key store ───────────────────────────────────
+    const { spawnKeyguard, waitForKeyguard } = await import("./keyguard-client.js");
+    const KEYGUARD_REPO = process.env.SPINNY_KEYGUARD_PATH || null;
+    if (KEYGUARD_REPO) {
+      spawnKeyguard(KEYGUARD_REPO);
+      try {
+        await waitForKeyguard();
+        console.log("[spinny] KeyGuard ready");
+      } catch {
+        console.error("[spinny] KeyGuard failed to start — falling back to local vault");
+      }
+    } else {
+      console.log("[spinny] SPINNY_KEYGUARD_PATH not set — using local vault");
+    }
 
     let relayConnected = false;
     let relayInstance = null;

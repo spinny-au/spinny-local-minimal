@@ -326,6 +326,7 @@ import {
 } from './selfcoder.js'
 import { attestAndSend } from './integrity.js'
 import { runAgent } from './agent.js'
+import { getKey, setKey, deleteKey, listKeys, keyguardHealth } from './keyguard-client.js'
 
 const downloads = new Map() // model -> { status, progress, done, success, startedAt }
 
@@ -1537,6 +1538,18 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
 
     // ── Vault: list stored providers (masked) ─────────────────────────────
     if (url.pathname === '/api/vault/keys' && req.method === 'GET') {
+      // Try KeyGuard first, fall back to local vault
+      try {
+        const kgHealth = await keyguardHealth().catch(() => null)
+        if (kgHealth?.ok) {
+          const kgKeys = await listKeys()
+          return json(res, {
+            keys: kgKeys.map(k => ({ provider: k.name, preview: k.metadata?.preview || '****', storedAt: k.updatedAt })),
+            source: 'keyguard',
+          }, 200, corsSpinnyReq)
+        }
+      } catch {}
+
       const vault = new Vault()
       try {
         const items = vault.list(VAULT_NS, 50)
@@ -1545,7 +1558,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
           preview: value?.key ? maskKey(value.key) : '****',
           storedAt: value?.storedAt || null,
         }))
-        return json(res, { keys }, 200, corsSpinnyReq)
+        return json(res, { keys, source: 'vault' }, 200, corsSpinnyReq)
       } finally { vault.close() }
     }
 
@@ -1564,6 +1577,8 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         if (key.length < 8) return json(res, { error: 'Key too short' }, 400, corsSpinnyReq)
         const manager = new LlmManager()
         try {
+          // Store in KeyGuard (primary) + local vault (fallback)
+          setKey(provider, key, { preview: maskKey(key) }).catch(() => {})
           manager.vault.put(VAULT_NS, provider, { key, storedAt: new Date().toISOString() })
           manager.upsertProvider(provider, parsed.metadata || {})
           return json(res, { ok: true, provider, preview: maskKey(key) }, 200, corsSpinnyReq)
@@ -1716,8 +1731,16 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
           }
 
           const providerRecord = selected.provider
-          const stored = manager.vault.get(VAULT_NS, providerRecord.provider)
-          const apiKey = stored?.key
+          // Try KeyGuard first, fall back to local vault
+          let apiKey = null
+          try {
+            const kgKey = await getKey(providerRecord.provider).catch(() => null)
+            if (kgKey?.value) apiKey = kgKey.value
+          } catch {}
+          if (!apiKey) {
+            const stored = manager.vault.get(VAULT_NS, providerRecord.provider)
+            apiKey = stored?.key
+          }
           if (!apiKey) {
             excluded.add(providerRecord.provider)
             continue
