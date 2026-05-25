@@ -35,6 +35,9 @@ const DEFAULT_STATE = {
   allowedUsers: [],
   pendingRequests: [],
   initialAdminSetupDone: false,
+  verticals: {
+    selfcoder: { enabled: false },
+  },
 };
 
 export function generatePairingCode() {

@@ -314,6 +314,16 @@ import {
   recordRejectedInstruction,
   savePrivacyPolicy,
 } from './instruction-handler.js'
+import {
+  readFile, writeFile, patchFile, listDir,
+  gitStatus, gitBranch, gitCommit, gitPush,
+  gitCreateRepo, gitClone, gitCreatePR,
+  npmRun, registerPreview, removePreview, resolvePreviewDist, getPreviewUrl,
+} from './tools.js'
+import {
+  selfcoderPlan, selfcoderApprove, selfcoderStart,
+  selfcoderStatus, selfcoderReject,
+} from './selfcoder.js'
 
 const downloads = new Map() // model -> { status, progress, done, success, startedAt }
 
@@ -602,6 +612,10 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         || p === '/api/memory/stats'
         || p === '/api/privacy'
         || p === '/api/receipts'
+        || p === '/api/tools'
+        || p.startsWith('/api/tools/')
+        || p.startsWith('/api/selfcoder')
+        || p.startsWith('/preview/')
       ) {
         console.log(`[preflight] OPTIONS ${p} origin="${origin}" pna=${pna || 'not-requested'}`)
         corsSpinnyReq(res)
@@ -1330,6 +1344,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
           allowedUsers: state.allowedUsers || [],
           pairedCount: state.allowedUsers?.length || (state.paired ? 1 : 0),
           paired: state.paired,
+          verticals: state.verticals || { selfcoder: { enabled: false } },
         })
       }
       if (req.method === 'POST') {
@@ -1339,6 +1354,14 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         if (typeof body.maxPairedAccounts === 'number') updates.maxPairedAccounts = Math.max(1, Math.min(50, body.maxPairedAccounts))
         if (typeof body.multiAccount === 'boolean') updates.multiAccount = body.multiAccount
         if (typeof body.locked === 'boolean') updates.locked = body.locked
+        if (body.verticals && typeof body.verticals === 'object') {
+          updates.verticals = { ...(state.verticals || {}), ...body.verticals }
+          for (const [key, val] of Object.entries(updates.verticals)) {
+            if (val && typeof val === 'object' && typeof val.enabled !== 'boolean') {
+              updates.verticals[key] = { enabled: false }
+            }
+          }
+        }
         const next = saveState({ ...state, ...updates })
         return json(res, {
           maxPairedAccounts: next.maxPairedAccounts || 1,
@@ -1347,6 +1370,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
           allowedUsers: next.allowedUsers || [],
           pairedCount: next.allowedUsers?.length || (next.paired ? 1 : 0),
           paired: next.paired,
+          verticals: next.verticals || { selfcoder: { enabled: false } },
         })
       }
     }
@@ -1737,6 +1761,236 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         if (!res.writableEnded) res.end()
       }
       return
+    }
+
+    // ── SelfCoder vertical gate ──────────────────────────────────────────────
+
+    if ((url.pathname.startsWith('/api/selfcoder') || url.pathname === '/api/tools' || url.pathname.startsWith('/api/tools/') || url.pathname.startsWith('/preview/')) && req.method !== 'OPTIONS') {
+      const state = loadState()
+      if (!state.verticals?.selfcoder?.enabled) {
+        return json(res, { error: 'vertical_not_enabled', message: 'SelfCoder vertical is not enabled for this node.' }, 403, corsSpinnyReq)
+      }
+    }
+
+    // ── SelfCoder workflow ───────────────────────────────────────────────────
+
+    if (url.pathname === '/api/selfcoder/status' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        return json(res, await selfcoderStatus(), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/selfcoder/plan' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        if (!body.repoRoot || !body.task) return json(res, { error: 'repoRoot and task required' }, 400, corsSpinnyReq)
+        const plan = await selfcoderPlan(body.repoRoot, body.task)
+        return json(res, plan, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/selfcoder/approve' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        if (!body.taskId) return json(res, { error: 'taskId required' }, 400, corsSpinnyReq)
+        const result = await selfcoderApprove(body.taskId)
+        return json(res, result, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/selfcoder/start' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        if (!body.taskId) return json(res, { error: 'taskId required' }, 400, corsSpinnyReq)
+        const result = await selfcoderStart(body.taskId)
+        return json(res, result, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/selfcoder/reject' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        if (!body.taskId) return json(res, { error: 'taskId required' }, 400, corsSpinnyReq)
+        const result = await selfcoderReject(body.taskId)
+        return json(res, result, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    // ── Tools: filesystem ────────────────────────────────────────────────────
+
+    if (url.pathname === '/api/tools/filesystem/read' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, readFile(body.repoRoot, body.filePath), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/tools/filesystem/write' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, writeFile(body.repoRoot, body.filePath, body.content), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/tools/filesystem/patch' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, patchFile(body.repoRoot, body.filePath, body.oldStr, body.newStr), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/tools/filesystem/list' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, listDir(body.repoRoot, body.dirPath || '.'), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    // ── Tools: git ───────────────────────────────────────────────────────────
+
+    if (url.pathname === '/api/tools/git/status' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, await gitStatus(body.repoRoot), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/tools/git/branch' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, await gitBranch(body.repoRoot, body.name, body.base || ''), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/tools/git/commit' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, await gitCommit(body.repoRoot, body.message), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/tools/git/push' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, await gitPush(body.repoRoot, body.branch), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/tools/git/pr' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, await gitCreatePR(body.repoRoot, body.title, body.base || 'main'), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/tools/git/create-repo' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, await gitCreateRepo(body.name, body.description, body.private, body.token), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    if (url.pathname === '/api/tools/git/clone' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        return json(res, await gitClone(body.url, body.targetPath), 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    // ── Tools: generic call (for spinny.au agent loop) ───────────────────────
+
+    if (url.pathname === '/api/tools' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        const { tool, params } = body
+        let result
+        switch (tool) {
+          case 'filesystem.read': result = readFile(params.repoRoot, params.filePath); break
+          case 'filesystem.write': result = writeFile(params.repoRoot, params.filePath, params.content); break
+          case 'filesystem.patch': result = patchFile(params.repoRoot, params.filePath, params.oldStr, params.newStr); break
+          case 'filesystem.list': result = listDir(params.repoRoot, params.dirPath || '.'); break
+          case 'git.status': result = await gitStatus(params.repoRoot); break
+          case 'git.branch': result = await gitBranch(params.repoRoot, params.name, params.base || ''); break
+          case 'git.commit': result = await gitCommit(params.repoRoot, params.message); break
+          case 'git.push': result = await gitPush(params.repoRoot, params.branch); break
+          case 'git.create_repo': result = await gitCreateRepo(params.name, params.description, params.private, params.token); break
+          case 'git.clone': result = await gitClone(params.url, params.targetPath); break
+          case 'git.pr': result = await gitCreatePR(params.repoRoot, params.title, params.base || 'main'); break
+          case 'npm.build': result = await npmRun(params.repoRoot, 'build'); break
+          case 'npm.test': result = await npmRun(params.repoRoot, 'test'); break
+          case 'preview.register': {
+            const previewUrl = registerPreview(params.taskId, params.distPath)
+            result = { previewUrl }
+            break
+          }
+          case 'preview.remove': removePreview(params.taskId); result = { removed: true }; break
+          default: return json(res, { error: `unknown tool: ${tool}` }, 400, corsSpinnyReq)
+        }
+        return json(res, result, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    // ── Preview serving ──────────────────────────────────────────────────────
+
+    if (url.pathname.startsWith('/preview/') && req.method === 'GET') {
+      const distPath = resolvePreviewDist(url.pathname)
+      if (!distPath) {
+        return json(res, { error: 'preview not found' }, 404, corsSpinnyReq)
+      }
+      const subPath = url.pathname.replace(/^\/preview\/[^/]+/, '') || '/index.html'
+      const full = join(distPath, subPath)
+      return serveStatic(res, full)
     }
 
     // Fetch live model list from provider using vault key
