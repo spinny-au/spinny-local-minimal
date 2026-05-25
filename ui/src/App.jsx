@@ -1781,6 +1781,20 @@ export function App() {
     setTheme(themes[(idx + 1) % themes.length])
   }
 
+  const [kgOnline, setKgOnline] = useState(false)
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const r = await fetch('/api/vault/keys')
+        const d = await r.json()
+        setKgOnline(d.source === 'keyguard')
+      } catch { setKgOnline(false) }
+    }
+    check()
+    const iv = setInterval(check, 10000)
+    return () => clearInterval(iv)
+  }, [])
+
   const TAB_ICONS = {
     Status: '◉', Models: '⬡', Chat: '💬', Vault: '🔐',
     System: '⊞', Logs: '☰', Admin: '⚙', Update: hasUpdate ? '⬆' : '⟳', About: 'ⓘ'
@@ -1795,6 +1809,16 @@ export function App() {
           <span className={`led led-james ${activeModel ? 'processing' : 'idle'}`} title={activeModel ? `LOCAL active: ${activeModel}` : 'LOCAL idle'}>
             <div style={{width:7,height:7,borderRadius:'99px'}} />
           </span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginLeft: 12, fontSize: 10, fontFamily: 'monospace' }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: 99,
+            background: kgOnline ? 'var(--ok)' : 'var(--text-dim)',
+            boxShadow: kgOnline ? '0 0 5px var(--ok)' : 'none',
+            transition: 'background 0.3s, box-shadow 0.3s',
+          }} />
+          <span style={{ color: kgOnline ? 'var(--ok)' : 'var(--text-dim)', fontWeight: 700, letterSpacing: '0.06em' }}>KEYGUARD</span>
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12 }}>
