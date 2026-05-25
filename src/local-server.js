@@ -325,6 +325,7 @@ import {
   selfcoderStatus, selfcoderReject,
 } from './selfcoder.js'
 import { attestAndSend } from './integrity.js'
+import { runAgent } from './agent.js'
 
 const downloads = new Map() // model -> { status, progress, done, success, startedAt }
 
@@ -615,6 +616,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         || p === '/api/receipts'
         || p === '/api/tools'
         || p.startsWith('/api/tools/')
+        || p === '/api/agent'
         || p.startsWith('/api/selfcoder')
         || p.startsWith('/preview/')
       ) {
@@ -1771,6 +1773,37 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       try {
         const result = await attestAndSend()
         return json(res, result, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
+    }
+
+    // ── Agent: tool-calling loop (cloud AI drives, local executes) ─────────
+
+    if (url.pathname === '/api/agent' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const body = await readJsonBody(req)
+        const messages = Array.isArray(body.messages) ? body.messages : null
+        if (!messages) return json(res, { error: 'messages required' }, 400, corsSpinnyReq)
+
+        corsSpinnyReq(res)
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
+        const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
+
+        try {
+          const result = await runAgent({
+            messages,
+            provider: body.provider || 'openai',
+            model: body.model || 'gpt-4o',
+            onEvent: (evt) => send(evt),
+          })
+          send({ type: 'final', ...result })
+        } catch (err) {
+          send({ type: 'error', error: err.message })
+        }
+        if (!res.writableEnded) res.end()
+        return
       } catch (err) {
         return json(res, { error: err.message }, 400, corsSpinnyReq)
       }

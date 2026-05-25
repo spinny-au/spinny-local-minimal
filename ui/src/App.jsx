@@ -1766,29 +1766,66 @@ export function App() {
   const { data: dlData } = usePoll('/api/models/downloading', 2000)
   const hasUpdate = updateInfo?.updateAvailable
   const tabs = TABS
+  const [theme, setTheme] = useState(() => localStorage.getItem('spinny:theme') || 'void')
+  const nodeOnline = status?.paired && !statusErr
+  const activeModel = sysInfo?.ollama?.models?.[0]?.name || null
+
+  useEffect(() => {
+    localStorage.setItem('spinny:theme', theme)
+    document.documentElement.className = `theme-${theme}`
+  }, [theme])
+
+  const cycleTheme = () => {
+    const themes = ['void', 'obsidian', 'ember', 'arctic']
+    const idx = themes.indexOf(theme)
+    setTheme(themes[(idx + 1) % themes.length])
+  }
+
+  const TAB_ICONS = {
+    Status: '◉', Models: '⬡', Chat: '💬', Vault: '🔐',
+    System: '⊞', Logs: '☰', Admin: '⚙', Update: hasUpdate ? '⬆' : '⟳', About: 'ⓘ'
+  }
 
   return (
     <>
-      <style>{css}</style>
-      <div className="app">
-        <div className="header">
-          <div>
-            <div className="header-logo">Spinny Local</div>
-            <div className="header-sub">localhost:47821</div>
-          </div>
-          <div className="tabs">
-            {tabs.map(t => (
-              <button
-                key={t}
-                className={`tab-btn${tab === t ? ' active' : ''}${t === 'Update' ? ' update-tab' : ''}`}
-                onClick={() => setTab(t)}
-              >
-                {t === 'Update' ? '⬆ Update' : t}
-              </button>
-            ))}
-          </div>
+      <div className="topbar">
+        <div className="wordmark">SPINNY</div>
+
+        <div className="leds" style={{ marginLeft: 8 }}>
+          <span className={`led led-james ${activeModel ? 'processing' : 'idle'}`} title={activeModel ? `Local: ${activeModel}` : 'Local idle'}>
+            <div style={{width:7,height:7,borderRadius:'99px'}} />
+          </span>
+          <span className="led led-core idle" title="CORE idle"><div style={{width:7,height:7,borderRadius:'99px'}} /></span>
+          <span className="led led-guru idle" title="GURU idle"><div style={{width:7,height:7,borderRadius:'99px'}} /></span>
+          <span className="led led-fenrir idle" title="FENRIR idle"><div style={{width:7,height:7,borderRadius:'99px'}} /></span>
         </div>
-        <div className="content">
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12 }}>
+          {activeModel && <span style={{color:'var(--text-muted)',fontSize:11}}>{activeModel}</span>}
+          <span className="status-dot" style={{background: nodeOnline ? 'var(--ok)' : 'var(--text-dim)',boxShadow: nodeOnline ? '0 0 6px var(--ok)' : 'none'}} />
+          <span style={{color:'var(--text-muted)',fontSize:11}}>{nodeOnline ? 'ONLINE' : 'OFFLINE'}</span>
+          <button className="btn-icon" onClick={cycleTheme} title={`Theme: ${theme}`} style={{fontSize:16}}>
+            {theme === 'void' ? '◉' : theme === 'obsidian' ? '◈' : theme === 'ember' ? '◆' : '◇'}
+          </button>
+        </div>
+      </div>
+
+      <div className="app-layout">
+        <div className="sidebar">
+          {tabs.map(t => (
+            <button
+              key={t}
+              className={`sidebar-item${tab === t ? ' active' : ''}`}
+              onClick={() => setTab(t)}
+            >
+              <span className="sidebar-icon">{TAB_ICONS[t]}</span>
+              <span className="sidebar-label">{t}</span>
+              {t === 'Update' && hasUpdate && <span className="sidebar-badge">!</span>}
+            </button>
+          ))}
+        </div>
+
+        <div className="main-area">
           {tab === 'Status' && <StatusTab status={status} sysInfo={sysInfo} error={statusErr} />}
           {tab === 'Models' && <ModelsTab sysInfo={sysInfo} error={sysErr} downloads={dlData || {}} />}
           {tab === 'Chat'   && <ChatTab sysInfo={sysInfo} />}

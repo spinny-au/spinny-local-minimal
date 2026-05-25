@@ -1,7 +1,7 @@
 {
-  "commit": "6e191f12e4d713785071d660c12bd2523ce70187",
-  "generatedAt": "2026-05-25T08:42:10.088Z",
-  "totalFiles": 68,
+  "commit": "5630f7de94ccd4ef9ec918122699a29769b2e116",
+  "generatedAt": "2026-05-25T09:04:15.288Z",
+  "totalFiles": 71,
   "files": {
     ".env.example": "5f868a1bce86905dc15c271e0e84a19bd2346603666f74b6ca5d2bae51d52c9d",
     ".gitignore": "a6c836be03ccb8e55ef85a4396421028db4d0fccf6486edb786bee4ce1fa2a1c",
@@ -32,6 +32,7 @@
     "scripts/uninstall-macos.sh": "1a6f89d459e3ade5d4b944ff8e4127e376df95ed2f51f471dd408cfef3782735",
     "scripts/uninstall-windows.ps1": "1429e8e730fc5f18501c7029b96dc329a6eef68fdbf9c447a2e8b3bc18551a27",
     "scripts/update-worker.mjs": "1b7a419e4192be6aa5bb5c301efb00d74097a9964d17e2aefd8d3af8cdd68baf",
+    "src/agent.js": "9d8fb37f2379029592eaa2a416de2e6c925085e23f204eb63751811c05a8aff0",
     "src/assets/tray.ico": "faae5af19e90f17b1b09fccbc2d658a49fb5c866999f88338f0b92374d2afe17",
     "src/doctor.js": "d3d695320c77503e9b062e8919cccf87a3d99891bf52cd9c41aada72ca606ace",
     "src/email-vertical.js": "61e64c76e44a70cb465a76d480dbf9dfc3c97347d2c4d999bcd5d8cee84b6c3b",
@@ -40,7 +41,7 @@
     "src/instruction-handler.js": "7ee10dbd5ee6e1b3db9a0597621100d845bf3384e970827a363209481bb450e1",
     "src/integrity.js": "154a55f85b20f0b9aeddf9c07880828e17ee488204cdd114f42d9cee428542f0",
     "src/llm-manager.js": "c601318db9c140bdcef6fcc972ab7ae27b6e4a9d16651b5f94ee9db45ee74dbb",
-    "src/local-server.js": "48ceafad76573adf268b19748b8a3cae4ca9526c118052df90519628d7a31817",
+    "src/local-server.js": "6505039bbb3ff127bbe4b5e36c3ddefe6d9dc469e7a515738e1dcb68c7862fa8",
     "src/log-buffer.js": "2c43a5fe6cea6f09faca29f293eed0e4d618b34455e89648ae5a8007fd12227a",
     "src/log-streamer.js": "45f793a16773c6d25380c05cc3cd6d1b8bab333835d349f081b77c8d22cf09de",
     "src/main.js": "8d98d2876f700509290f445abdca93b8091a14cf7e27ae0afdb4be2d3d465a00",
@@ -63,13 +64,15 @@
     "src/tray.js": "d981956ef2ae175bb7a252fbec5ab46d3b75eb55848d2c1353942bd006bd644e",
     "src/vault.js": "a8506b417c22f3b80846feb87c53b9d1b6c58bf14f0dca823a3fbe7e6079fd14",
     "test/run.js": "0f2f8acbf49c166c32f7ca9356c1ed8949b572a1c527208c4da2d585231fe957",
-    "ui/dist/assets/index-DIC6rP6F.js": "e28447c7afda8c47c9fcdf01b9ab054af678c9c20abff81f9391923223e9bf04",
-    "ui/dist/index.html": "f15506f4e0e02d61affae0337610d85e57516f09dcccff7fe029fd941475fad3",
-    "ui/index.html": "59838af0ad4a53a595ca251e7c4a594a42831c0aed133e9ba33fd27a9f42a019",
+    "ui/dist/assets/index-C0xILD8A.js": "e869eda5b4203ef1301ab9a1068c830e9c9dbbfe82d29bfe2b742ebfb6580c4f",
+    "ui/dist/assets/index-D7DiC_kh.css": "a2572452a276cb0125d4d303c6ee754dfc5ec09b3b7bc306e2d35f91bfe07645",
+    "ui/dist/index.html": "dd861f61dda07a06422a6eb1c4e3e8460df64266b25cea7a11121c78633a42fa",
+    "ui/index.html": "831b773a373c9f6fb5c178679a6d8836d70667a55299bc5e69f663fcbf8e3a37",
     "ui/package-lock.json": "75c01a73ff18e591743d6f1984d38bae0e0629e2f1dc57aa97890e500edc7dae",
     "ui/package.json": "ed5ad06d0013e60a2de3378b4bdf45da6e0ebbf192a853ac418071770c8187fa",
-    "ui/src/App.jsx": "3aeb5e3124586dce158253e3f817fa13596b9c017017cb0174adf99591667698",
+    "ui/src/App.jsx": "61a29dd714cd241dd63559220a040c749bd29227a98bcae0d81e71c5822a2107",
     "ui/src/main.jsx": "95cb1837d8e1818c49b44932b315dc90d41e011da926c261dcb2647fc966486b",
+    "ui/src/styles.css": "edcb8c4f51eb911e3b9dd73b0753e92af553fba0330684e37d85cf11dd26e62c",
     "ui/vite.config.js": "e9ee6dcc6accb044c3df31deb9f47c5ef36b6cd215a1909a17beb9451e681e77"
   }
 }
