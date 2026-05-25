@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
@@ -7,10 +7,31 @@ const mode = process.argv[3] || 'apply'
 const target = process.argv[4] || 'origin/main'
 const logPath = join(repoRoot, 'spinny-update.log')
 const signalPath = join(repoRoot, '.update-signal')
+const statePath = join(repoRoot, 'spinny-update-state.json')
 
 function log(message) {
   const line = `[${new Date().toISOString()}] ${message}\n`
   try { appendFileSync(logPath, line, 'utf8') } catch {}
+}
+
+function readState() {
+  try {
+    if (!existsSync(statePath)) return {}
+    return JSON.parse(readFileSync(statePath, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function writeState(patch) {
+  const current = readState()
+  const next = {
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  }
+  try { writeFileSync(statePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8') } catch {}
+  return next
 }
 
 async function sleep(ms) {
@@ -47,6 +68,26 @@ function run(command, args) {
 async function runNpmInstall() {
   const npm = npmCommand(['install', '--omit=dev'])
   return run(npm.command, npm.args)
+}
+
+async function runNpmScript(script) {
+  const npm = npmCommand(['run', script])
+  return run(npm.command, npm.args)
+}
+
+function currentCommit() {
+  return new Promise(resolve => {
+    const child = spawn(process.platform === 'win32' ? 'git.exe' : 'git', ['rev-parse', 'HEAD'], {
+      cwd: repoRoot,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    })
+    let out = ''
+    child.stdout?.on('data', d => { out += d })
+    child.on('close', code => resolve(code === 0 ? out.trim() : null))
+    child.on('error', () => resolve(null))
+  })
 }
 
 function writeSignal(status, error = null) {
@@ -123,30 +164,85 @@ async function restartNode() {
 
 async function main() {
   let err = null
+  let status = 'complete'
   try {
     await sleep(1500)
     log(`${mode} started`)
+    writeState({
+      mode,
+      stage: mode === 'rollback' ? 'rollback-started' : `${mode}-started`,
+      previousCommit: target && target !== 'null' ? target : readState().previousCommit || null,
+      error: null,
+    })
 
     if (mode === 'apply') {
+      writeState({ stage: 'fetching' })
       if (await run(process.platform === 'win32' ? 'git.exe' : 'git', ['fetch', 'origin', 'main']) !== 0) throw new Error('git fetch failed')
+      writeState({ stage: 'resetting', previousCommit: target || null })
       if (await run(process.platform === 'win32' ? 'git.exe' : 'git', ['reset', '--hard', 'origin/main']) !== 0) throw new Error('git reset failed')
+      writeState({ stage: 'installing' })
       if (await runNpmInstall() !== 0) throw new Error('npm install failed')
+      writeState({ stage: 'building-ui' })
+      if (await runNpmScript('build:ui') !== 0) throw new Error('npm run build:ui failed')
+      writeState({ stage: 'testing' })
+      if (await runNpmScript('test') !== 0) throw new Error('npm test failed')
     } else if (mode === 'rollback') {
       if (!target || target === 'null') throw new Error('missing rollback target')
+      writeState({ stage: 'rollback-resetting', previousCommit: target })
       if (await run(process.platform === 'win32' ? 'git.exe' : 'git', ['reset', '--hard', target]) !== 0) throw new Error('git reset failed')
+      writeState({ stage: 'rollback-installing' })
       if (await runNpmInstall() !== 0) throw new Error('npm install failed')
+      writeState({ stage: 'rollback-building-ui' })
+      if (await runNpmScript('build:ui') !== 0) throw new Error('npm run build:ui failed')
     } else if (mode === 'restart') {
       // no-op; just signal and let parent restart
     } else {
       throw new Error(`unknown mode: ${mode}`)
     }
 
+    const after = await currentCommit()
+    writeState({
+      stage: 'ready-to-restart',
+      lastGoodCommit: after || readState().lastGoodCommit || null,
+      currentCommit: after || null,
+      completedAt: new Date().toISOString(),
+    })
     log(`${mode} complete; writing signal for parent`)
   } catch (e) {
     err = e
     log(`${mode} failed: ${e.message}`)
+    writeState({ stage: `${mode}-failed`, error: e.message })
+    if (mode === 'apply' && target && target !== 'null') {
+      log(`attempting automatic rollback to ${target}`)
+      writeState({ stage: 'auto-rollback-started', rollbackTarget: target })
+      const resetCode = await run(process.platform === 'win32' ? 'git.exe' : 'git', ['reset', '--hard', target])
+      const installCode = resetCode === 0 ? await runNpmInstall() : 1
+      const buildCode = installCode === 0 ? await runNpmScript('build:ui') : 1
+      if (resetCode === 0 && installCode === 0 && buildCode === 0) {
+        status = 'rolled_back'
+        const afterRollback = await currentCommit()
+        writeState({
+          stage: 'rolled-back',
+          currentCommit: afterRollback || target,
+          lastGoodCommit: afterRollback || target,
+          rollbackError: e.message,
+          completedAt: new Date().toISOString(),
+        })
+        log(`automatic rollback complete after failed apply: ${e.message}`)
+      } else {
+        status = 'failed'
+        writeState({
+          stage: 'rollback-failed',
+          rollbackError: e.message,
+          rollbackCodes: { resetCode, installCode, buildCode },
+        })
+        log(`automatic rollback failed reset=${resetCode} install=${installCode} build=${buildCode}`)
+      }
+    } else {
+      status = 'failed'
+    }
   } finally {
-    writeSignal(err ? 'failed' : 'complete', err?.message || null)
+    writeSignal(err ? status : 'complete', err?.message || null)
     if (err) {
       await sleep(4000)
       if (existsSync(signalPath)) {

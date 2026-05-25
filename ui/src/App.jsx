@@ -1114,6 +1114,7 @@ function ChatTab({ sysInfo }) {
 }
 
 const POST_RESTART_NOTICE_KEY = 'spinny:update-success'
+const RESTART_SNAPSHOT_KEY = 'spinny:restart-snapshot'
 
 function readPostRestartNotice() {
   try { return window.sessionStorage.getItem(POST_RESTART_NOTICE_KEY) || '' } catch { return '' }
@@ -1129,7 +1130,30 @@ function savePostRestartNotice(message) {
   try { window.sessionStorage.setItem(POST_RESTART_NOTICE_KEY, message) } catch {}
 }
 
-function useStreamedAction(endpoint) {
+function readRestartSnapshot() {
+  try {
+    const raw = window.sessionStorage.getItem(RESTART_SNAPSHOT_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function consumeRestartSnapshot() {
+  const snap = readRestartSnapshot()
+  try { window.sessionStorage.removeItem(RESTART_SNAPSHOT_KEY) } catch {}
+  return snap
+}
+
+function saveRestartSnapshot(snapshot) {
+  try {
+    window.sessionStorage.setItem(RESTART_SNAPSHOT_KEY, JSON.stringify({
+      ...snapshot,
+      scrollY: window.scrollY,
+      savedAt: Date.now(),
+    }))
+  } catch {}
+}
+
+function useStreamedAction(endpoint, beforeRun) {
   const [phase, setPhase] = useState('idle') // idle | running | success | failed | rolledBack | restarting
   const [lines, setLines] = useState([])
 
@@ -1137,6 +1161,7 @@ function useStreamedAction(endpoint) {
     setPhase('running')
     setLines([])
     try {
+      beforeRun?.()
       const r = await fetch(endpoint, { method: 'POST' })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const reader = r.body?.getReader()
@@ -1218,9 +1243,9 @@ function ReconnectWatch({ successMessage }) {
   )
 }
 
-function UpdateTab({ updateInfo: initialUpdateInfo, onUpdated }) {
-  const update = useStreamedAction('/api/update/apply')
-  const rollback = useStreamedAction('/api/update/rollback')
+function UpdateTab({ updateInfo: initialUpdateInfo, onUpdated, onBeforeRestart }) {
+  const update = useStreamedAction('/api/update/apply', () => onBeforeRestart?.('update'))
+  const rollback = useStreamedAction('/api/update/rollback', () => onBeforeRestart?.('rollback'))
   const [updateInfo, setUpdateInfo] = React.useState(initialUpdateInfo)
   const [checking, setChecking] = React.useState(false)
   const [restartNotice, setRestartNotice] = React.useState(consumePostRestartNotice)
@@ -1715,8 +1740,21 @@ const TABS = ['Status', 'Models', 'Chat', 'Vault', 'System', 'Logs', 'Admin', 'U
 
 export function App() {
   const { data: status, error: statusErr } = usePoll('/api/status', 5000)
-  const [tab, setTab] = useState(() => readPostRestartNotice() ? 'Update' : 'Admin') // default to Admin; switch to Status once paired
-  const [tabInitialised, setTabInitialised] = useState(() => Boolean(readPostRestartNotice()))
+  const [tab, setTab] = useState(() => {
+    const snap = readRestartSnapshot()
+    if (snap?.tab) return snap.tab
+    return readPostRestartNotice() ? 'Update' : 'Admin'
+  }) // default to Admin; switch to Status once paired
+  const [tabInitialised, setTabInitialised] = useState(() => Boolean(readPostRestartNotice() || readRestartSnapshot()?.tab))
+
+  useEffect(() => {
+    const snap = consumeRestartSnapshot()
+    if (!snap) return
+    if (snap.tab) setTab(snap.tab)
+    if (Number.isFinite(snap.scrollY)) {
+      setTimeout(() => window.scrollTo({ top: snap.scrollY, behavior: 'auto' }), 150)
+    }
+  }, [])
 
   useEffect(() => {
     if (tabInitialised || !status) return
@@ -1759,7 +1797,7 @@ export function App() {
           {tab === 'Logs'  && <LogsTab />}
           {tab === 'Admin' && <AdminTab />}
           {tab === 'About' && <AboutTab sysInfo={sysInfo} />}
-          {tab === 'Update' && <UpdateTab updateInfo={updateInfo} onUpdated={() => setTab('Status')} />}
+          {tab === 'Update' && <UpdateTab updateInfo={updateInfo} onUpdated={() => setTab('Status')} onBeforeRestart={(mode) => saveRestartSnapshot({ tab, mode })} />}
         </div>
       </div>
     </>

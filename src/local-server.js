@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
-import { readFileSync, existsSync, rmSync } from 'node:fs'
+import { readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join, extname, dirname } from 'node:path'
 import { spawn, execSync } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -10,12 +10,29 @@ const LOCAL_VERSION = (() => { try { return _require('../package.json').version 
 
 // ── Update state (module-level, survives the update process until restart) ─────
 const REPO_ROOT = join(import.meta.dirname, '..')
+const UPDATE_STATE_PATH = join(REPO_ROOT, 'spinny-update-state.json')
 let _prevCommitHash = null   // set before every update; used for rollback
 let _updateCheckCache = null // { result, fetchedAt }
 const UPDATE_CACHE_TTL = 5 * 60 * 1000
 
 function localCommitHash() {
   try { return execSync('git rev-parse HEAD', { cwd: REPO_ROOT, windowsHide: true }).toString().trim() } catch { return null }
+}
+
+function readUpdateState() {
+  try {
+    if (!existsSync(UPDATE_STATE_PATH)) return {}
+    return JSON.parse(readFileSync(UPDATE_STATE_PATH, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function writeUpdateState(patch) {
+  const current = readUpdateState()
+  const next = { ...current, ...patch, updatedAt: new Date().toISOString() }
+  try { writeFileSync(UPDATE_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`, 'utf8') } catch {}
+  return next
 }
 
 async function fetchRemoteCommit() {
@@ -120,6 +137,13 @@ function startUpdateWorker(mode, target = '') {
       try {
         const signal = JSON.parse(readFileSync(signalPath, 'utf8'))
         logEvent('update', 'signal', `status=${signal.status} mode=${signal.mode} error=${signal.error || 'none'}`)
+        writeUpdateState({
+          mode: signal.mode,
+          stage: signal.status === 'rolled_back' ? 'rolled-back' : signal.status,
+          signalStatus: signal.status,
+          error: signal.error || null,
+          signalledAt: signal.timestamp || new Date().toISOString(),
+        })
       } catch {}
       try { rmSync(signalPath) } catch {}
       restarted = true
@@ -258,6 +282,8 @@ import { getSystemInfo } from './system-info.js'
 import { getLines } from './log-buffer.js'
 import { captureChildStderr, logEvent } from './log-streamer.js'
 import { Vault } from './vault.js'
+import { LlmManager, classifyProviderError, estimateTokens, normalizeProviderId } from './llm-manager.js'
+import { MemoryLayer } from './memory-layer.js'
 import { exportModelBundle, importModelBundle, importModelBundleFromUrl, getBundleReadStream } from './model-bundles.js'
 import {
   captureFeedback,
@@ -301,9 +327,129 @@ const CLOUD_APIS = {
   anthropic:   { url: 'https://api.anthropic.com/v1/messages',            format: 'anthropic' },
 }
 
+async function streamManagedProvider({ manager, providerRecord, apiKey, model, messages, send }) {
+  const started = Date.now()
+  const inputTokens = estimateTokens(messages)
+  let outputText = ''
+  const chosenModel = model || providerRecord.models?.[0]
+  if (!chosenModel) throw new Error(`No model configured for ${providerRecord.provider}`)
+
+  const response = await fetchProvider(providerRecord, apiKey, chosenModel, messages)
+  if (!response.ok || !response.body) {
+    const text = await response.text().catch(() => '')
+    const info = classifyProviderError(response.status, response.headers, text)
+    manager.recordError(providerRecord.provider, { ...info, httpStatus: response.status, body: text.slice(0, 500) })
+    const err = new Error(`${providerRecord.provider} ${response.status}: ${info.code}`)
+    err.providerError = info
+    throw err
+  }
+
+  const reader = response.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop() ?? ''
+    for (const line of lines) {
+      const piece = parseProviderStreamLine(providerRecord, line)
+      if (piece.done) {
+        send({ content: '', done: true })
+        continue
+      }
+      if (piece.content) {
+        outputText += piece.content
+        send({ content: piece.content, done: false })
+      }
+    }
+  }
+  const outputTokens = estimateTokens(outputText)
+  const costUsd = estimateCost(providerRecord, inputTokens, outputTokens)
+  manager.recordSuccess(providerRecord.provider, {
+    inputTokens,
+    outputTokens,
+    latencyMs: Date.now() - started,
+    headers: response.headers,
+    costUsd,
+  })
+  send({ content: '', done: true, provider: providerRecord.provider, model: chosenModel })
+  return { provider: providerRecord.provider, model: chosenModel, inputTokens, outputTokens, costUsd, outputText }
+}
+
+function fetchProvider(provider, apiKey, model, messages) {
+  if (provider.format === 'anthropic') {
+    return fetch(provider.endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model, messages, max_tokens: 8096, stream: true }),
+      signal: AbortSignal.timeout(90_000),
+    })
+  }
+  if (provider.format === 'gemini') {
+    const endpoint = provider.endpoint.replace('{model}', encodeURIComponent(model))
+    const system = messages.find(m => m?.role === 'system')?.content || ''
+    const contents = messages
+      .filter(m => m?.role !== 'system')
+      .map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: String(m.content || '') }],
+      }))
+    return fetch(`${endpoint}?alt=sse&key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...(system ? { systemInstruction: { parts: [{ text: String(system) }] } } : {}),
+        contents,
+      }),
+      signal: AbortSignal.timeout(90_000),
+    })
+  }
+  const headers = { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` }
+  if (provider.provider === 'openrouter') {
+    headers['http-referer'] = 'https://spinny.au'
+    headers['x-title'] = 'Spinny'
+  }
+  return fetch(provider.endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model, messages, stream: true }),
+    signal: AbortSignal.timeout(90_000),
+  })
+}
+
+function parseProviderStreamLine(provider, line) {
+  if (!line.startsWith('data:')) return {}
+  const data = line.slice(5).trim()
+  if (!data || data === '[DONE]') return { done: true }
+  try {
+    const chunk = JSON.parse(data)
+    if (provider.format === 'anthropic') {
+      if (chunk.type === 'content_block_delta' && chunk.delta?.text) return { content: chunk.delta.text }
+      if (chunk.type === 'message_stop') return { done: true }
+      return {}
+    }
+    if (provider.format === 'gemini') {
+      const content = chunk.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || ''
+      return content ? { content } : {}
+    }
+    const content = chunk.choices?.[0]?.delta?.content
+    const finished = chunk.choices?.[0]?.finish_reason != null
+    return { content, done: finished }
+  } catch {
+    return {}
+  }
+}
+
+function estimateCost(provider, inputTokens, outputTokens) {
+  const pricing = provider.pricing || {}
+  return Number((((inputTokens / 1_000_000) * (pricing.inputPerMTok || 0)) + ((outputTokens / 1_000_000) * (pricing.outputPerMTok || 0))).toFixed(6))
+}
+
 function maskKey(key) {
   if (!key || key.length < 8) return '****'
-  return key.slice(0, 8) + '****'
+  return `${key.slice(0, 4)}...${key.slice(-4)}`
 }
 
 function corsSpinny(res, reqOrigin) {
@@ -451,6 +597,8 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         || p === '/api/instruction'
         || p.startsWith('/api/pairing/')
         || p.startsWith('/api/email/')
+        || p === '/api/memory'
+        || p.startsWith('/api/memory/')
         || p === '/api/memory/stats'
         || p === '/api/privacy'
         || p === '/api/receipts'
@@ -560,7 +708,83 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
 
     if (url.pathname === '/api/memory/stats' && req.method === 'GET') {
       if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
-      return json(res, memoryStats(), 200, corsSpinnyReq)
+      const memory = new MemoryLayer()
+      try {
+        return json(res, { encryptedVault: memory.stats(), apprenticeship: memoryStats() }, 200, corsSpinnyReq)
+      } finally { memory.close() }
+    }
+
+    if (url.pathname === '/api/memory' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const category = url.searchParams.get('category') || 'pinned'
+      const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get('limit') || '100', 10)))
+      const memory = new MemoryLayer()
+      try {
+        return json(res, { category, items: memory.list(category, limit) }, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      } finally { memory.close() }
+    }
+
+    if (url.pathname === '/api/memory/prompt-context' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const memory = new MemoryLayer()
+      try {
+        return json(res, {
+          context: memory.buildPromptContext({
+            tier: url.searchParams.get('tier') || 'guru',
+            tokenBudget: parseInt(url.searchParams.get('tokenBudget') || '3000', 10),
+          }),
+        }, 200, corsSpinnyReq)
+      } finally { memory.close() }
+    }
+
+    if (url.pathname === '/api/memory/search' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const category = url.searchParams.get('category') || 'conversation'
+      const query = url.searchParams.get('q') || ''
+      const memory = new MemoryLayer()
+      try {
+        return json(res, { category, query, results: memory.search(category, query) }, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      } finally { memory.close() }
+    }
+
+    if (url.pathname === '/api/memory/facts' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const memory = new MemoryLayer()
+      try {
+        return json(res, { facts: memory.search('conversation', url.searchParams.get('q') || 'fact', 100) }, 200, corsSpinnyReq)
+      } finally { memory.close() }
+    }
+
+    if (url.pathname === '/api/memory/facts' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const parsed = await readJsonBody(req)
+        const text = String(parsed.text || '').trim()
+        if (!text) return json(res, { error: 'text required' }, 400, corsSpinnyReq)
+        const memory = new MemoryLayer()
+        try {
+          const entry = parsed.pinned ? memory.pin(text) : memory.rememberFact(text, parsed.category || 'general')
+          return json(res, { ok: true, entry: { key: entry.key, category: entry.category, updatedAt: entry.updatedAt } }, 200, corsSpinnyReq)
+        } finally { memory.close() }
+      } catch (err) {
+        return json(res, { error: err.message }, err.status || 400, corsSpinnyReq)
+      }
+    }
+
+    const memoryDelete = url.pathname.match(/^\/api\/memory\/([a-z0-9_:-]+)\/([^/]+)$/i)
+    if (memoryDelete && req.method === 'DELETE') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const memory = new MemoryLayer()
+      try {
+        memory.delete(memoryDelete[1], decodeURIComponent(memoryDelete[2]))
+        return json(res, { ok: true }, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      } finally { memory.close() }
     }
 
     if (url.pathname === '/api/email/status' && req.method === 'GET') {
@@ -994,6 +1218,12 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400) }
         const { model, messages } = parsed
         if (!model || !Array.isArray(messages)) return json(res, { error: 'model and messages required' }, 400)
+        const memory = new MemoryLayer()
+        const promptContext = memory.buildPromptContext({ tier: 'local', tokenBudget: 1800 })
+        const outboundMessages = promptContext
+          ? [{ role: 'system', content: promptContext }, ...messages]
+          : messages
+        let assistantText = ''
         cors(res)
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
         const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
@@ -1005,7 +1235,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model, messages, stream: true,
+              model, messages: outboundMessages, stream: true,
               keep_alive: -1,
               ...(isThinkingModel ? { think: false } : {}),
             }),
@@ -1025,12 +1255,28 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
               try {
                 const chunk = JSON.parse(line)
                 const content = chunk.message?.content ?? ''
+                if (content) assistantText += content
                 send({ content, done: chunk.done ?? false })
               } catch {}
             }
           }
+          const lastUser = [...messages].reverse().find(m => m?.role === 'user')?.content || ''
+          if (lastUser || assistantText) {
+            memory.write('conversation', `turn:${Date.now()}`, {
+              user: String(lastUser).slice(0, 8000),
+              assistant: assistantText.slice(0, 12000),
+              model,
+              at: new Date().toISOString(),
+            }, { syncable: false })
+            memory.write('working', `recent:${Date.now()}`, {
+              summary: `Local chat with ${model}: ${String(lastUser).slice(0, 240)}`,
+              at: new Date().toISOString(),
+            }, { syncable: true })
+          }
         } catch (err) {
           send({ error: err.message })
+        } finally {
+          memory.close()
         }
         res.end()
       })
@@ -1185,6 +1431,14 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     }
 
     // Apply update — fetch + reset --hard + npm install + auto-rollback on failure, then restart
+    if (url.pathname === '/api/update/status' && req.method === 'GET') {
+      return json(res, {
+        ...readUpdateState(),
+        currentCommit: localCommitHash(),
+        localVersion: LOCAL_VERSION,
+      })
+    }
+
     if (url.pathname === '/api/update/apply' && req.method === 'POST') {
       cors(res)
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
@@ -1193,6 +1447,14 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       const savedHash = localCommitHash()
       _prevCommitHash = savedHash
       _updateCheckCache = null // invalidate cache
+      writeUpdateState({
+        mode: 'apply',
+        stage: 'queued',
+        previousCommit: savedHash || null,
+        currentCommit: savedHash || null,
+        requestedAt: new Date().toISOString(),
+        error: null,
+      })
 
       try {
         send({ status: 'Starting hidden background updater. The dashboard will be back soon.' })
@@ -1212,13 +1474,21 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
       const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
 
-      const target = _prevCommitHash
+      const saved = readUpdateState()
+      const target = _prevCommitHash || saved.previousCommit || saved.lastGoodCommit
       if (!target) {
         send({ done: true, success: false, error: 'No previous version recorded — restart the node to restore.' })
         return res.end()
       }
 
       _updateCheckCache = null
+      writeUpdateState({
+        mode: 'rollback',
+        stage: 'queued',
+        previousCommit: target,
+        requestedAt: new Date().toISOString(),
+        error: null,
+      })
       send({ status: `Starting hidden rollback to ${target.slice(0, 8)}. The dashboard will be back soon.` })
       try {
         send({ done: true, success: true, restarting: true })
@@ -1260,15 +1530,17 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
       req.on('end', () => {
         let parsed
         try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400, corsSpinnyReq) }
-        const { provider, key } = parsed
+        const provider = normalizeProviderId(parsed.provider)
+        const { key } = parsed
         if (!provider || !key) return json(res, { error: 'provider and key required' }, 400, corsSpinnyReq)
         if (!/^[\w-]+$/.test(provider)) return json(res, { error: 'Invalid provider name' }, 400, corsSpinnyReq)
         if (key.length < 8) return json(res, { error: 'Key too short' }, 400, corsSpinnyReq)
-        const vault = new Vault()
+        const manager = new LlmManager()
         try {
-          vault.put(VAULT_NS, provider, { key, storedAt: new Date().toISOString() })
+          manager.vault.put(VAULT_NS, provider, { key, storedAt: new Date().toISOString() })
+          manager.upsertProvider(provider, parsed.metadata || {})
           return json(res, { ok: true, provider, preview: maskKey(key) }, 200, corsSpinnyReq)
-        } finally { vault.close() }
+        } finally { manager.close() }
       })
       return
     }
@@ -1277,7 +1549,7 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     const vaultDel = url.pathname.match(/^\/api\/vault\/keys\/([\w-]+)$/)
     if (vaultDel && req.method === 'DELETE') {
       if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
-      const provider = vaultDel[1]
+      const provider = normalizeProviderId(vaultDel[1])
       const vault = new Vault()
       try {
         vault.db.prepare('DELETE FROM encrypted_items WHERE namespace = ? AND item_key = ?').run(VAULT_NS, provider)
@@ -1286,84 +1558,184 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
     }
 
     // ── Cloud chat: use vault key to call AI provider, stream SSE ─────────
+    if (url.pathname === '/api/vault/status' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const manager = new LlmManager()
+      try {
+        return json(res, manager.status(), 200, corsSpinnyReq)
+      } finally { manager.close() }
+    }
+
+    if (url.pathname === '/api/vault/providers' && req.method === 'GET') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const manager = new LlmManager()
+      try {
+        return json(res, { providers: manager.status().providers, routing: manager.config() }, 200, corsSpinnyReq)
+      } finally { manager.close() }
+    }
+
+    if (url.pathname === '/api/vault/providers' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const parsed = await readJsonBody(req)
+        const provider = normalizeProviderId(parsed.provider)
+        if (!provider || !/^[\w-]+$/.test(provider)) return json(res, { error: 'valid provider required' }, 400, corsSpinnyReq)
+        const { key, provider: _provider, ...patch } = parsed
+        const manager = new LlmManager()
+        try {
+          if (key) manager.vault.put(VAULT_NS, provider, { key: String(key), storedAt: new Date().toISOString() })
+          const record = manager.upsertProvider(provider, patch)
+          return json(res, { ok: true, provider, record }, 200, corsSpinnyReq)
+        } finally { manager.close() }
+      } catch (err) {
+        return json(res, { error: err.message }, err.status || 400, corsSpinnyReq)
+      }
+    }
+
+    const vaultProviderAction = url.pathname.match(/^\/api\/vault\/providers\/([\w-]+)\/(pause|resume|limits)$/)
+    if (vaultProviderAction) {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const manager = new LlmManager()
+      const provider = normalizeProviderId(vaultProviderAction[1])
+      const action = vaultProviderAction[2]
+      try {
+        if (req.method === 'GET' && action === 'limits') {
+          const record = manager.registry().find(p => p.provider === provider)
+          if (!record) return json(res, { error: 'provider not found' }, 404, corsSpinnyReq)
+          return json(res, { provider, limits: record.limits, usage: manager.usage(provider) }, 200, corsSpinnyReq)
+        }
+        if (req.method !== 'POST') return json(res, { error: 'method not allowed' }, 405, corsSpinnyReq)
+        const record = manager.pauseProvider(provider, action === 'pause')
+        manager.event(`provider.${action}`, { provider })
+        return json(res, { ok: true, provider, record }, 200, corsSpinnyReq)
+      } finally { manager.close() }
+    }
+
+    if (url.pathname === '/api/vault/use' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const parsed = await readJsonBody(req).catch(() => ({}))
+      const provider = normalizeProviderId(parsed.provider)
+      const manager = new LlmManager()
+      try {
+        const config = manager.saveConfig({ forcedProvider: provider || null, rotationEnabled: !provider ? true : manager.config().rotationEnabled })
+        manager.event(provider ? 'routing.forced' : 'routing.auto', { provider: provider || null })
+        return json(res, { ok: true, routing: config }, 200, corsSpinnyReq)
+      } finally { manager.close() }
+    }
+
+    if (url.pathname === '/api/vault/auto' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      const manager = new LlmManager()
+      try {
+        const config = manager.saveConfig({ forcedProvider: null, rotationEnabled: true })
+        manager.event('routing.auto', {})
+        return json(res, { ok: true, routing: config }, 200, corsSpinnyReq)
+      } finally { manager.close() }
+    }
+
+    if (url.pathname === '/api/vault/priority' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const parsed = await readJsonBody(req)
+        const provider = normalizeProviderId(parsed.provider)
+        const tier = String(parsed.tier || '').toLowerCase()
+        const taskType = String(parsed.taskType || 'reasoning').toLowerCase()
+        const position = Math.max(1, parseInt(parsed.position || '1', 10))
+        if (!provider || !['core', 'guru', 'fenrir'].includes(tier)) return json(res, { error: 'provider and tier required' }, 400, corsSpinnyReq)
+        const manager = new LlmManager()
+        try {
+          const current = manager.config()
+          const group = [...(current.priority?.[tier]?.[taskType] || [])].filter(p => p !== provider)
+          group.splice(position - 1, 0, provider)
+          const priority = { [tier]: { ...(current.priority?.[tier] || {}), [taskType]: group } }
+          const routing = manager.saveConfig({ priority })
+          manager.event('routing.priority', { provider, tier, taskType, position })
+          return json(res, { ok: true, routing }, 200, corsSpinnyReq)
+        } finally { manager.close() }
+      } catch (err) {
+        return json(res, { error: err.message }, err.status || 400, corsSpinnyReq)
+      }
+    }
+
     if (url.pathname === '/api/cloud-chat' && req.method === 'POST') {
       if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
-      let body = ''
-      req.on('data', d => { body += d })
-      req.on('end', async () => {
-        let parsed
-        try { parsed = JSON.parse(body) } catch { return json(res, { error: 'Invalid request' }, 400, corsSpinnyReq) }
-        const { provider, model, messages } = parsed
-        if (!provider || !model || !Array.isArray(messages)) return json(res, { error: 'provider, model and messages required' }, 400, corsSpinnyReq)
-        if (!CLOUD_APIS[provider]) return json(res, { error: `Unknown provider: ${provider}` }, 400, corsSpinnyReq)
+      let parsed
+      try { parsed = await readJsonBody(req) } catch { return json(res, { error: 'Invalid request' }, 400, corsSpinnyReq) }
+      const messages = Array.isArray(parsed.messages) ? parsed.messages : null
+      if (!messages) return json(res, { error: 'messages required' }, 400, corsSpinnyReq)
+      const memory = new MemoryLayer()
+      const promptContext = memory.buildPromptContext({ tier: parsed.tier || 'guru', tokenBudget: 2600 })
+      const managedMessages = promptContext
+        ? [{ role: 'system', content: promptContext }, ...messages]
+        : messages
 
-        const vault = new Vault()
-        let apiKey
-        try {
-          const entry = vault.get(VAULT_NS, provider)
-          apiKey = entry?.key
-        } finally { vault.close() }
-        if (!apiKey) return json(res, { error: `No vault key stored for: ${provider}` }, 401, corsSpinnyReq)
+      corsSpinnyReq(res)
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
+      const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
 
-        corsSpinnyReq(res)
-        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
-        const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {} }
-
-        try {
-          const api = CLOUD_APIS[provider]
-          if (api.format === 'anthropic') {
-            const r = await fetch(api.url, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-              body: JSON.stringify({ model, messages, max_tokens: 8096, stream: true }),
-            })
-            if (!r.ok) { send({ error: `Anthropic ${r.status}: ${await r.text()}` }); return res.end() }
-            const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''
-            while (true) {
-              const { done, value } = await reader.read(); if (done) break
-              buf += dec.decode(value, { stream: true })
-              const lines = buf.split('\n'); buf = lines.pop() ?? ''
-              for (const line of lines) {
-                if (!line.startsWith('data:')) continue
-                const d = line.slice(5).trim(); if (!d) continue
-                try {
-                  const evt = JSON.parse(d)
-                  if (evt.type === 'content_block_delta' && evt.delta?.text) send({ content: evt.delta.text, done: false })
-                  else if (evt.type === 'message_stop') send({ content: '', done: true })
-                } catch {}
-              }
-            }
-          } else {
-            // OpenAI-compatible (openai, xai, openrouter)
-            const headers = { 'content-type': 'application/json', 'authorization': `Bearer ${apiKey}` }
-            if (provider === 'openrouter') { headers['http-referer'] = 'https://spinny.au'; headers['x-title'] = 'Spinny' }
-            const r = await fetch(api.url, {
-              method: 'POST',
-              headers,
-              body: JSON.stringify({ model, messages, stream: true }),
-            })
-            if (!r.ok) { send({ error: `${provider} ${r.status}: ${await r.text()}` }); return res.end() }
-            const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''
-            while (true) {
-              const { done, value } = await reader.read(); if (done) break
-              buf += dec.decode(value, { stream: true })
-              const lines = buf.split('\n'); buf = lines.pop() ?? ''
-              for (const line of lines) {
-                if (!line.startsWith('data:')) continue
-                const d = line.slice(5).trim(); if (!d || d === '[DONE]') { send({ content: '', done: true }); continue }
-                try {
-                  const chunk = JSON.parse(d)
-                  const content = chunk.choices?.[0]?.delta?.content
-                  const finished = chunk.choices?.[0]?.finish_reason != null
-                  if (content) send({ content, done: false })
-                  if (finished) send({ content: '', done: true })
-                } catch {}
-              }
-            }
+      const manager = new LlmManager()
+      const excluded = new Set()
+      const manualProvider = parsed.provider && parsed.provider !== 'auto' ? normalizeProviderId(parsed.provider) : null
+      const tier = parsed.tier || 'guru'
+      const taskType = parsed.taskType || 'reasoning'
+      let attempts = 0
+      try {
+        while (attempts < 8) {
+          attempts += 1
+          const selected = manager.select({ tier, taskType, provider: attempts === 1 ? manualProvider : null, exclude: [...excluded] })
+          if (!selected.provider) {
+            send({ error: `No cloud provider available for ${tier}; use LOCAL/Ollama or add a vault key.`, exhausted: true, done: true })
+            break
           }
-        } catch (err) { send({ error: err.message }) }
+
+          const providerRecord = selected.provider
+          const stored = manager.vault.get(VAULT_NS, providerRecord.provider)
+          const apiKey = stored?.key
+          if (!apiKey) {
+            excluded.add(providerRecord.provider)
+            continue
+          }
+
+          const model = parsed.model || providerRecord.models?.[0]
+          send({ route: { provider: providerRecord.provider, model, tier, taskType, reason: selected.reason, health: selected.status } })
+          if (selected.status?.status === 'APPROACHING') {
+            manager.event('provider.approaching', { provider: providerRecord.provider, tier, taskType, reason: selected.status.reason })
+            send({ notice: `${providerRecord.name} is approaching its configured limit; routing will fall back automatically if needed.` })
+          }
+
+          try {
+            const result = await streamManagedProvider({ manager, providerRecord, apiKey, model, messages: managedMessages, send })
+            manager.event('request.success', { provider: providerRecord.provider, model, tier, taskType })
+            const lastUser = [...messages].reverse().find(m => m?.role === 'user')?.content || ''
+            if (lastUser || result.outputText) {
+              memory.write('conversation', `cloud:${Date.now()}`, {
+                user: String(lastUser).slice(0, 8000),
+                assistant: String(result.outputText || '').slice(0, 12000),
+                provider: providerRecord.provider,
+                model,
+                tier,
+                taskType,
+                at: new Date().toISOString(),
+              }, { syncable: false })
+              memory.write('working', `cloud:${Date.now()}`, {
+                summary: `${tier}/${taskType} via ${providerRecord.provider}: ${String(lastUser).slice(0, 240)}`,
+                at: new Date().toISOString(),
+              }, { syncable: true })
+            }
+            break
+          } catch (err) {
+            excluded.add(providerRecord.provider)
+            const info = err.providerError || classifyProviderError(err.status || 0, {}, err.message)
+            manager.recordError(providerRecord.provider, info)
+            manager.event('routing.fallback', { provider: providerRecord.provider, tier, taskType, reason: info.code })
+            send({ notice: `Switched away from ${providerRecord.name}: ${info.code}` })
+          }
+        }
+      } finally {
+        manager.close()
+        memory.close()
         if (!res.writableEnded) res.end()
-      })
+      }
       return
     }
 
