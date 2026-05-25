@@ -324,6 +324,7 @@ import {
   selfcoderPlan, selfcoderApprove, selfcoderStart,
   selfcoderStatus, selfcoderReject,
 } from './selfcoder.js'
+import { attestAndSend } from './integrity.js'
 
 const downloads = new Map() // model -> { status, progress, done, success, startedAt }
 
@@ -1761,6 +1762,18 @@ export function startLocalServer({ getRelayStatus, getRelayError, onPaired, getR
         if (!res.writableEnded) res.end()
       }
       return
+    }
+
+    // ── Security: manual re-attest ──────────────────────────────────────────
+
+    if (url.pathname === '/api/security/attest' && req.method === 'POST') {
+      if (!isTrustedOrigin(req)) return json(res, { error: 'Forbidden' }, 403, corsSpinnyReq)
+      try {
+        const result = await attestAndSend()
+        return json(res, result, 200, corsSpinnyReq)
+      } catch (err) {
+        return json(res, { error: err.message }, 400, corsSpinnyReq)
+      }
     }
 
     // ── SelfCoder vertical gate ──────────────────────────────────────────────

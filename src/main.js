@@ -327,6 +327,28 @@ try {
       console.error('[relay] initial connect failed:', relayError);
     });
 
+    // ── Integrity attestation ──────────────────────────────────────────────
+    const { attestAndSend } = await import("./integrity.js");
+    const initialAttestation = await attestAndSend();
+    const attStatus = initialAttestation?.sent?.ok ? initialAttestation.status : 'send_failed';
+    console.log(`[integrity] attestation: ${attStatus} (${initialAttestation.totalFiles || 0} files)`);
+    if (initialAttestation.status === "tampered") {
+      console.error(`[integrity] TAMPER DETECTED — ${initialAttestation.diffs.length} file(s) modified:`);
+      for (const d of initialAttestation.diffs.slice(0, 10)) {
+        console.error(`  ${d.path} (${d.reason})`);
+      }
+    }
+
+    // Periodic re-attestation every 5 minutes
+    setInterval(async () => {
+      try {
+        const result = await attestAndSend();
+        if (result.status !== "verified") {
+          console.error(`[integrity] periodic check: ${result.status} — ${result.diffs.length} diffs`);
+        }
+      } catch {}
+    }, 5 * 60 * 1000);
+
     console.log("Spinny local node running.");
 
   } else if (command === "pairingcode") {
