@@ -1792,12 +1792,9 @@ export function App() {
         <div className="wordmark">SPINNY</div>
 
         <div className="leds" style={{ marginLeft: 8 }}>
-          <span className={`led led-james ${activeModel ? 'processing' : 'idle'}`} title={activeModel ? `Local: ${activeModel}` : 'Local idle'}>
+          <span className={`led led-james ${activeModel ? 'processing' : 'idle'}`} title={activeModel ? `LOCAL active: ${activeModel}` : 'LOCAL idle'}>
             <div style={{width:7,height:7,borderRadius:'99px'}} />
           </span>
-          <span className="led led-core idle" title="CORE idle"><div style={{width:7,height:7,borderRadius:'99px'}} /></span>
-          <span className="led led-guru idle" title="GURU idle"><div style={{width:7,height:7,borderRadius:'99px'}} /></span>
-          <span className="led led-fenrir idle" title="FENRIR idle"><div style={{width:7,height:7,borderRadius:'99px'}} /></span>
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12 }}>
